@@ -704,80 +704,87 @@ function Spark({ data, color = 'var(--color-accent)' }: { data: number[]; color?
   );
 }
 
-// --- Unified Feed: Metrics + Logs interleaved, proving "Write Once, Query Everything" ---
+// --- Unified Stream: real-time feed with append-on-top behavior ---
 
-interface FeedItem {
+interface StreamItem {
+  id: string;
   type: 'metric' | 'log';
   source: string;
   color: string;
-  uniql: string;
   ts: string;
   content: string;
   value?: string;
   badge?: string;
   badgeColor?: string;
+  fresh: boolean;
 }
 
+const MAX_STREAM_ITEMS = 80;
+const STREAM_POLL_MS = 3000;
+
 function UnifiedFeed() {
-  const [items, setItems] = useState<FeedItem[]>([]);
-  const [queryCount, setQueryCount] = useState(0);
-  const [totalMs, setTotalMs] = useState(0);
+  const [items, setItems] = useState<StreamItem[]>([]);
+  const [paused, setPaused] = useState(false);
+  const [stats, setStats] = useState({ queries: 0, ms: 0, metrics: 0, logs: 0 });
+  const seenRef = useRef<Set<string>>(new Set());
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const fetchFeed = async () => {
-      const start = performance.now();
-      const now = new Date();
-      const ts = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    if (paused) return;
 
-      // 4 parallel UNIQL queries: 2 metric + 2 log → different backends, same syntax
-      const [esxiRes, serviceRes, fgtRes, fssoRes] = await Promise.allSettled([
+    const poll = async () => {
+      const start = performance.now();
+
+      const [esxiRes, svcRes, fgtRes, fssoRes] = await Promise.allSettled([
         fetch(`${ENGINE_URL}/v1/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'SHOW timeseries FROM victoria WHERE __name__ = "vsphere_host_cpu_usage_average"' }) }).then(r => r.json()),
         fetch(`${ENGINE_URL}/v1/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'SHOW timeseries FROM victoria WHERE __name__ = "up"' }) }).then(r => r.json()),
-        fetch(`${ENGINE_URL}/v1/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'SHOW table FROM vlogs WHERE job = "fortigate" WITHIN last 30s', limit: 8 }) }).then(r => r.json()),
-        fetch(`${ENGINE_URL}/v1/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'SHOW table FROM vlogs WHERE job = "fsso" WITHIN last 30s', limit: 5 }) }).then(r => r.json()),
+        fetch(`${ENGINE_URL}/v1/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'SHOW table FROM vlogs WHERE job = "fortigate" WITHIN last 5s', limit: 10 }) }).then(r => r.json()),
+        fetch(`${ENGINE_URL}/v1/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'SHOW table FROM vlogs WHERE job = "fsso" WITHIN last 5s', limit: 5 }) }).then(r => r.json()),
       ]);
 
-      const feed: FeedItem[] = [];
+      const newItems: StreamItem[] = [];
+      const now = new Date();
+      const ts = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      let mCount = 0, lCount = 0;
 
-      // ESXi metrics
+      // ESXi — top 3 by CPU
       if (esxiRes.status === 'fulfilled') {
         const results: MetricResult[] = esxiRes.value?.data?.data?.result ?? [];
-        // Pick top 3 by CPU
         const sorted = [...results].sort((a, b) => parseFloat(b.value?.[1] || '0') - parseFloat(a.value?.[1] || '0'));
         for (const r of sorted.slice(0, 3)) {
           const cpu = parseFloat(r.value?.[1] || '0');
-          feed.push({
-            type: 'metric', source: 'vCenter', color: '#7c5cfc',
-            uniql: 'FROM victoria WHERE __name__="vsphere_host_cpu_usage_average"',
-            ts, content: r.metric.esxhostname || '?',
-            value: cpu.toFixed(1) + '%',
-            badge: cpu > 50 ? 'HIGH' : cpu > 20 ? 'MEDIUM' : 'LOW',
-            badgeColor: cpu > 50 ? 'var(--color-red)' : cpu > 20 ? 'var(--color-amber)' : 'var(--color-green)',
-          });
+          const host = r.metric.esxhostname || '?';
+          const id = `esxi-${host}-${ts}`;
+          if (!seenRef.current.has(id)) {
+            seenRef.current.add(id);
+            newItems.push({
+              id, type: 'metric', source: 'vCenter', color: '#7c5cfc', ts,
+              content: host, value: cpu.toFixed(1) + '%',
+              badge: cpu > 50 ? 'HIGH' : cpu > 20 ? 'MED' : 'OK',
+              badgeColor: cpu > 50 ? 'var(--color-red)' : cpu > 20 ? 'var(--color-amber)' : 'var(--color-green)',
+              fresh: true,
+            });
+            mCount++;
+          }
         }
       }
 
-      // Service health
-      if (serviceRes.status === 'fulfilled') {
-        const results: MetricResult[] = serviceRes.value?.data?.data?.result ?? [];
-        const down = results.filter(r => r.value?.[1] !== '1');
-        const upCount = results.filter(r => r.value?.[1] === '1').length;
-        feed.push({
-          type: 'metric', source: 'Platform', color: '#3fb950',
-          uniql: 'FROM victoria WHERE __name__="up"',
-          ts, content: `${upCount}/${results.length} services healthy`,
-          value: `${upCount}/${results.length}`,
-          badge: down.length > 0 ? 'DEGRADED' : 'HEALTHY',
-          badgeColor: down.length > 0 ? 'var(--color-red)' : 'var(--color-green)',
-        });
-        // Show down services individually
-        for (const d of down) {
-          feed.push({
-            type: 'metric', source: 'Platform', color: '#e03c31',
-            uniql: 'FROM victoria WHERE __name__="up"',
-            ts, content: `${d.metric.job || '?'} is DOWN`,
-            badge: 'DOWN', badgeColor: 'var(--color-red)',
+      // Services
+      if (svcRes.status === 'fulfilled') {
+        const results: MetricResult[] = svcRes.value?.data?.data?.result ?? [];
+        const up = results.filter(r => r.value?.[1] === '1').length;
+        const id = `svc-${ts}`;
+        if (!seenRef.current.has(id)) {
+          seenRef.current.add(id);
+          newItems.push({
+            id, type: 'metric', source: 'Platform', color: '#3fb950', ts,
+            content: `${up}/${results.length} services`,
+            value: up === results.length ? 'ALL UP' : `${results.length - up} DOWN`,
+            badge: up === results.length ? 'OK' : 'ALERT',
+            badgeColor: up === results.length ? 'var(--color-green)' : 'var(--color-red)',
+            fresh: true,
           });
+          mCount++;
         }
       }
 
@@ -786,23 +793,27 @@ function UnifiedFeed() {
         const data = fgtRes.value?.data;
         const cols: string[] = data?.columns ?? [];
         const rows: unknown[][] = data?.rows ?? [];
-        const msgIdx = cols.indexOf('_msg');
-        const actionIdx = cols.indexOf('action');
-        const subtypeIdx = cols.indexOf('subtype');
-        const timeIdx = cols.indexOf('_time');
-        const srcIpIdx = cols.indexOf('source_ip');
-        for (const row of rows.slice(0, 5)) {
-          const action = actionIdx >= 0 ? (row[actionIdx] as string) : '';
-          const logTs = timeIdx >= 0 ? new Date(row[timeIdx] as string).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ts;
-          const subtype = subtypeIdx >= 0 ? (row[subtypeIdx] as string) : '';
-          const srcIp = srcIpIdx >= 0 ? (row[srcIpIdx] as string) : '';
-          const msg = msgIdx >= 0 ? (row[msgIdx] as string || '').slice(0, 100) : '';
-          feed.push({
-            type: 'log', source: 'FortiGate', color: '#e09c5e',
-            uniql: 'FROM vlogs WHERE job="fortigate"',
-            ts: logTs, content: `${subtype} ${srcIp} ${msg}`.trim(),
-            badge: action, badgeColor: action === 'deny' ? 'var(--color-red)' : action === 'accept' ? 'var(--color-green)' : 'var(--color-text-dim)',
-          });
+        const mi = cols.indexOf('_msg'), ai = cols.indexOf('action'), ti = cols.indexOf('_time');
+        const si = cols.indexOf('subtype'), ipi = cols.indexOf('source_ip');
+        for (const row of rows) {
+          const rawTs = ti >= 0 ? (row[ti] as string) : '';
+          const logTs = rawTs ? new Date(rawTs).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ts;
+          const action = ai >= 0 ? (row[ai] as string) : '';
+          const sub = si >= 0 ? (row[si] as string) : '';
+          const ip = ipi >= 0 ? (row[ipi] as string) : '';
+          const msg = mi >= 0 ? (row[mi] as string || '').slice(0, 90) : '';
+          const id = `fgt-${rawTs || Math.random()}`;
+          if (!seenRef.current.has(id)) {
+            seenRef.current.add(id);
+            newItems.push({
+              id, type: 'log', source: 'FortiGate', color: '#e09c5e', ts: logTs,
+              content: `${sub} ${ip} ${msg}`.trim(),
+              badge: action || undefined,
+              badgeColor: action === 'deny' ? 'var(--color-red)' : action === 'accept' ? 'var(--color-green)' : 'var(--color-text-dim)',
+              fresh: true,
+            });
+            lCount++;
+          }
         }
       }
 
@@ -811,77 +822,99 @@ function UnifiedFeed() {
         const data = fssoRes.value?.data;
         const cols: string[] = data?.columns ?? [];
         const rows: unknown[][] = data?.rows ?? [];
-        const msgIdx = cols.indexOf('_msg');
-        const timeIdx = cols.indexOf('_time');
-        for (const row of rows.slice(0, 3)) {
-          const logTs = timeIdx >= 0 ? new Date(row[timeIdx] as string).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ts;
-          const msg = msgIdx >= 0 ? (row[msgIdx] as string || '').slice(0, 120) : '';
-          feed.push({
-            type: 'log', source: 'FSSO', color: '#40c8d0',
-            uniql: 'FROM vlogs WHERE job="fsso"',
-            ts: logTs, content: msg,
-            badge: 'SSO', badgeColor: 'var(--color-cyan)',
-          });
+        const mi = cols.indexOf('_msg'), ti = cols.indexOf('_time');
+        for (const row of rows) {
+          const rawTs = ti >= 0 ? (row[ti] as string) : '';
+          const logTs = rawTs ? new Date(rawTs).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ts;
+          const msg = mi >= 0 ? (row[mi] as string || '').slice(0, 100) : '';
+          const id = `fsso-${rawTs || Math.random()}`;
+          if (!seenRef.current.has(id)) {
+            seenRef.current.add(id);
+            newItems.push({
+              id, type: 'log', source: 'FSSO', color: '#40c8d0', ts: logTs,
+              content: msg, badge: 'SSO', badgeColor: 'var(--color-cyan)', fresh: true,
+            });
+            lCount++;
+          }
         }
       }
 
-      setItems(feed);
-      setQueryCount(4);
-      setTotalMs(Math.round(performance.now() - start));
+      // Trim seen set
+      if (seenRef.current.size > 500) {
+        const arr = Array.from(seenRef.current);
+        seenRef.current = new Set(arr.slice(-300));
+      }
+
+      if (newItems.length > 0) {
+        setItems(prev => {
+          const unfreshed = prev.map(i => ({ ...i, fresh: false }));
+          return [...newItems, ...unfreshed].slice(0, MAX_STREAM_ITEMS);
+        });
+      }
+
+      setStats({ queries: 4, ms: Math.round(performance.now() - start), metrics: mCount, logs: lCount });
     };
 
-    fetchFeed();
-    const interval = setInterval(fetchFeed, 10_000);
+    poll();
+    const interval = setInterval(poll, STREAM_POLL_MS);
     return () => clearInterval(interval);
-  }, []);
-
-  if (items.length === 0) return null;
+  }, [paused]);
 
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden">
       <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-3)]">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-[var(--color-accent)] tracking-wider">UNIFIED FEED</span>
-          <span className="text-[10px] text-[var(--color-green)] font-mono">
-            {items.filter(i => i.type === 'metric').length} metrics + {items.filter(i => i.type === 'log').length} logs
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-semibold text-[var(--color-accent)] tracking-wider">UNIFIED STREAM</span>
+          <span className="relative flex items-center justify-center w-2 h-2">
+            <span className="absolute w-full h-full rounded-full bg-[var(--color-green)]" style={{ animation: paused ? 'none' : 'pulse-ring 2s ease-out infinite' }} />
+            <span className={`w-1.5 h-1.5 rounded-full ${paused ? 'bg-[var(--color-text-dim)]' : 'bg-[var(--color-green)]'}`} />
           </span>
+          <span className="text-[10px] text-[var(--color-text-dim)] font-mono">{items.length} events</span>
         </div>
-        <div className="flex items-center gap-3 text-[10px] text-[var(--color-text-dim)] font-mono">
-          <span>{queryCount} UNIQL queries</span>
-          <span>{totalMs}ms</span>
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]" /> PromQL</span>
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[var(--color-amber)]" /> LogsQL</span>
+        <div className="flex items-center gap-3 text-[10px] font-mono">
+          <button
+            onClick={() => setPaused(p => !p)}
+            className="px-2 py-0.5 rounded text-[9px] font-semibold cursor-pointer transition-all border"
+            style={{
+              color: paused ? 'var(--color-amber)' : 'var(--color-text-dim)',
+              borderColor: paused ? 'var(--color-amber)' : 'var(--color-border)',
+              background: paused ? 'var(--color-amber-dim)' : 'transparent',
+            }}
+          >
+            {paused ? 'PAUSED' : 'PAUSE'}
+          </button>
+          <span className="text-[var(--color-text-dim)]">{stats.ms}ms</span>
+          <span className="flex items-center gap-1 text-[var(--color-accent)]"><span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]" />PromQL</span>
+          <span className="flex items-center gap-1 text-[var(--color-amber)]"><span className="w-1.5 h-1.5 rounded-full bg-[var(--color-amber)]" />LogsQL</span>
         </div>
       </div>
-      <div className="max-h-72 overflow-y-auto">
-        {items.map((item, i) => (
-          <div key={i} className="px-4 py-1.5 hover:bg-[var(--color-surface-3)] transition-colors flex items-center gap-2 border-b border-[var(--color-border)]/20">
-            {/* Type indicator */}
-            <span className={`w-1 h-4 rounded-full shrink-0 ${item.type === 'metric' ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-amber)]'}`} />
-            {/* Timestamp */}
+      <div ref={containerRef} className="max-h-80 overflow-y-auto">
+        {items.map((item) => (
+          <div
+            key={item.id}
+            className={`px-4 py-1 flex items-center gap-2 border-b border-[var(--color-border)]/15 transition-all duration-500 ${
+              item.fresh ? 'bg-[var(--color-accent)]/8' : 'hover:bg-[var(--color-surface-3)]'
+            }`}
+          >
+            <span className={`w-1 h-3.5 rounded-full shrink-0 ${item.type === 'metric' ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-amber)]'}`} />
             <span className="text-[9px] text-[var(--color-text-dim)] font-mono shrink-0 w-[50px]">{item.ts}</span>
-            {/* Source badge */}
-            <span className="text-[8px] font-bold font-mono px-1.5 py-0.5 rounded shrink-0 min-w-[52px] text-center" style={{ background: `${item.color}18`, color: item.color, border: `1px solid ${item.color}40` }}>
+            <span className="text-[8px] font-bold font-mono px-1.5 py-0.5 rounded shrink-0 min-w-[54px] text-center" style={{ background: `${item.color}15`, color: item.color, border: `1px solid ${item.color}35` }}>
               {item.source}
             </span>
-            {/* Action/status badge */}
             {item.badge && (
-              <span className="text-[8px] font-bold font-mono px-1.5 py-0.5 rounded shrink-0" style={{ background: `${item.badgeColor}18`, color: item.badgeColor }}>
+              <span className="text-[8px] font-bold font-mono px-1 py-0.5 rounded shrink-0" style={{ background: `${item.badgeColor}15`, color: item.badgeColor }}>
                 {item.badge}
               </span>
             )}
-            {/* Content */}
-            <span className="text-[10px] text-[var(--color-text)] font-mono truncate flex-1 min-w-0">
-              {item.content}
-            </span>
-            {/* Value (metrics only) */}
+            <span className="text-[10px] text-[var(--color-text)] font-mono truncate flex-1 min-w-0">{item.content}</span>
             {item.value && (
-              <span className="text-[10px] font-bold font-mono shrink-0 tabular-nums" style={{ color: item.color }}>
-                {item.value}
-              </span>
+              <span className="text-[10px] font-bold font-mono shrink-0 tabular-nums" style={{ color: item.color }}>{item.value}</span>
             )}
           </div>
         ))}
+        {items.length === 0 && (
+          <div className="p-8 text-center text-[var(--color-text-dim)] text-xs">Waiting for data...</div>
+        )}
       </div>
     </div>
   );
