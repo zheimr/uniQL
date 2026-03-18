@@ -162,36 +162,187 @@ export default function InvestigateTab({ engine }: Props) {
                 </div>
               </div>
 
-              {/* Result cards */}
-              {results.map(r => (
-                <div key={r.name} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden">
-                  <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)] bg-[var(--color-surface-3)]">
-                    <div className="flex items-center gap-2">
-                      <span className={`w-2 h-2 rounded-full ${r.status === 'success' ? 'bg-[var(--color-green)]' : 'bg-[var(--color-red)]'}`} />
-                      <span className="text-xs font-semibold text-[var(--color-text)]">{r.name}</span>
+              {/* Analysis Report */}
+              <AnalysisReport results={results} packId={activePack.id} param={param} />
+
+              {/* Raw query details (collapsible) */}
+              <Details label="Query Details">
+                {results.map(r => (
+                  <div key={r.name} className="border-b border-[var(--color-border)]/20 py-3 last:border-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`w-1.5 h-1.5 rounded-full ${r.status === 'success' ? 'bg-[var(--color-green)]' : 'bg-[var(--color-red)]'}`} />
+                      <span className="text-[10px] font-semibold text-[var(--color-text)]">{r.name}</span>
+                      <span className="text-[9px] text-[var(--color-text-dim)] font-mono ml-auto">{r.execute_time_ms}ms</span>
                     </div>
-                    <span className="text-[10px] text-[var(--color-text-dim)] font-mono">{r.execute_time_ms}ms</span>
+                    <div className="text-[10px] text-[var(--color-accent)] font-mono mb-0.5">{r.query}</div>
+                    {r.native_query && <div className="text-[10px] text-[var(--color-cyan)] font-mono">{r.native_query}</div>}
+                    {r.error && <div className="text-[10px] text-[var(--color-red)] mt-1">{r.error}</div>}
                   </div>
-                  <div className="p-4 space-y-2">
-                    <div className="text-[10px]">
-                      <span className="text-[var(--color-text-dim)]">UniQL: </span>
-                      <span className="text-[var(--color-accent)] font-mono">{r.query}</span>
-                    </div>
-                    {r.native_query && (
-                      <div className="text-[10px]">
-                        <span className="text-[var(--color-text-dim)]">Native: </span>
-                        <span className="text-[var(--color-cyan)] font-mono">{r.native_query}</span>
-                      </div>
-                    )}
-                    {r.error && <div className="text-[10px] text-[var(--color-red)]">{r.error}</div>}
-                    <ResultPreview data={r.data} status={r.status} />
-                  </div>
-                </div>
-              ))}
+                ))}
+              </Details>
             </>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function Details({ label, children }: { label: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden">
+      <button onClick={() => setOpen(!open)} className="w-full flex items-center justify-between px-4 py-2.5 text-[11px] font-semibold text-[var(--color-text-dim)] hover:text-[var(--color-text)] cursor-pointer bg-[var(--color-surface-3)]">
+        {label} <span>{open ? '▼' : '▶'}</span>
+      </button>
+      {open && <div className="px-4 py-2">{children}</div>}
+    </div>
+  );
+}
+
+function AnalysisReport({ results, packId, param }: { results: PackResult[]; packId: string; param: string }) {
+  // Extract structured data from results
+  const extractMetrics = (r: PackResult) => {
+    if (r.status !== 'success') return [];
+    const d = r.data as Record<string, unknown>;
+    const promResult = (d?.data as Record<string, unknown>)?.result as Record<string, unknown>[] | undefined;
+    if (!Array.isArray(promResult)) return [];
+    return promResult.map((item: Record<string, unknown>) => ({
+      metric: item.metric as Record<string, string>,
+      value: ((item.value as [number, string])?.[1]) || '0',
+    }));
+  };
+
+  const extractLogs = (r: PackResult) => {
+    if (r.status !== 'success') return [];
+    const d = r.data as Record<string, unknown>;
+    const logs = d?.result as Record<string, unknown>[] | undefined;
+    if (!Array.isArray(logs)) {
+      const rows = (d?.rows as unknown[][]) || [];
+      const cols = (d?.columns as string[]) || [];
+      return rows.slice(0, 10).map(row => {
+        const obj: Record<string, string> = {};
+        cols.forEach((c, i) => { obj[c] = String(row[i] || ''); });
+        return obj;
+      });
+    }
+    return logs.slice(0, 10);
+  };
+
+  if (packId === 'high_cpu') {
+    const cpuData = results[0] ? extractMetrics(results[0]) : [];
+    const vmData = results[1] ? extractMetrics(results[1]) : [];
+    const memData = results[2] ? extractMetrics(results[2]) : [];
+
+    // Calculate host CPU average
+    const cpuValues = cpuData.map(d => parseFloat(d.value)).filter(v => !isNaN(v));
+    const avgCpu = cpuValues.length > 0 ? cpuValues.reduce((a, b) => a + b, 0) / cpuValues.length : 0;
+
+    // Top VMs by CPU
+    const vms = vmData
+      .filter(d => d.metric?.cpu === 'instance-total')
+      .map(d => ({ name: d.metric?.vmname || '?', cpu: parseFloat(d.value) }))
+      .sort((a, b) => b.cpu - a.cpu);
+
+    // Memory
+    const memValue = memData.length > 0 ? parseFloat(memData[0].value) : 0;
+
+    const cpuSeverity = avgCpu > 80 ? 'CRITICAL' : avgCpu > 50 ? 'HIGH' : avgCpu > 20 ? 'MODERATE' : 'LOW';
+    const cpuColor = avgCpu > 80 ? 'var(--color-red)' : avgCpu > 50 ? 'var(--color-amber)' : 'var(--color-green)';
+
+    return (
+      <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden">
+        <div className="px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-surface-3)]">
+          <div className="text-xs font-bold text-[var(--color-text-bright)]">Analysis: {param}</div>
+          <div className="text-[10px] text-[var(--color-text-dim)]">DELLR750_Cluster — {cpuData.length} CPU cores, {vms.length} VMs</div>
+        </div>
+        <div className="p-4 space-y-4">
+          {/* CPU Overview */}
+          <div className="flex items-center gap-4">
+            <div className="w-20 h-20 rounded-full border-4 flex items-center justify-center" style={{ borderColor: cpuColor }}>
+              <div className="text-center">
+                <div className="text-lg font-bold font-mono" style={{ color: cpuColor }}>{avgCpu.toFixed(1)}%</div>
+                <div className="text-[8px] text-[var(--color-text-dim)]">AVG CPU</div>
+              </div>
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded" style={{ background: `${cpuColor}20`, color: cpuColor }}>{cpuSeverity}</span>
+                <span className="text-[11px] text-[var(--color-text)]">Host CPU utilization is {cpuSeverity.toLowerCase()}</span>
+              </div>
+              <div className="text-[10px] text-[var(--color-text-dim)]">
+                Memory: {memValue.toFixed(1)}% — {memValue > 80 ? 'Memory pressure detected' : 'Memory normal'}
+              </div>
+            </div>
+          </div>
+
+          {/* Top VMs */}
+          {vms.length > 0 && (
+            <div>
+              <div className="text-[10px] font-semibold text-[var(--color-text-dim)] uppercase tracking-wider mb-2">Top VMs by CPU on this host</div>
+              <div className="space-y-1">
+                {vms.slice(0, 5).map((vm, i) => {
+                  const barColor = vm.cpu > 50 ? 'var(--color-red)' : vm.cpu > 20 ? 'var(--color-amber)' : 'var(--color-green)';
+                  return (
+                    <div key={i} className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono text-[var(--color-text)] w-44 truncate">{vm.name}</span>
+                      <div className="flex-1 h-2 rounded-full bg-[var(--color-surface)] overflow-hidden">
+                        <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(100, vm.cpu)}%`, background: barColor }} />
+                      </div>
+                      <span className="text-[10px] font-bold font-mono w-12 text-right" style={{ color: barColor }}>{vm.cpu.toFixed(1)}%</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Recommendation */}
+          <div className="rounded-lg bg-[var(--color-surface-3)] border border-[var(--color-border)] p-3">
+            <div className="text-[10px] font-semibold text-[var(--color-accent)] mb-1">Recommendation</div>
+            <div className="text-[11px] text-[var(--color-text)]">
+              {avgCpu > 50
+                ? `High CPU on ${param}. Top consumer: ${vms[0]?.name || '?'} at ${vms[0]?.cpu.toFixed(1)}%. Consider VM rightsizing or migration.`
+                : avgCpu > 20
+                ? `Moderate CPU usage. ${vms.filter(v => v.cpu > 20).length} VMs above 20%. Monitor for trend.`
+                : `CPU usage is healthy. ${vms.length} VMs running normally on this host.`
+              }
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Generic report for other packs
+  return (
+    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+      <div className="text-xs font-bold text-[var(--color-text-bright)] mb-3">Analysis: {packId} — {param}</div>
+      {results.map(r => {
+        const metrics = extractMetrics(r);
+        const logs = extractLogs(r);
+        const count = metrics.length || logs.length;
+        return (
+          <div key={r.name} className="mb-3 last:mb-0">
+            <div className="flex items-center gap-2 mb-1">
+              <span className={`w-1.5 h-1.5 rounded-full ${r.status === 'success' ? 'bg-[var(--color-green)]' : 'bg-[var(--color-red)]'}`} />
+              <span className="text-[11px] font-semibold text-[var(--color-text)]">{r.name}</span>
+              <span className="text-[9px] text-[var(--color-text-dim)]">{count} results, {r.execute_time_ms}ms</span>
+            </div>
+            {metrics.length > 0 && (
+              <div className="ml-3.5 space-y-0.5">
+                {metrics.slice(0, 5).map((m, i) => {
+                  const label = Object.entries(m.metric).filter(([k]) => k !== '__name__' && k !== 'job' && k !== 'instance' && k !== 'host').slice(0, 2).map(([k, v]) => `${k}=${v}`).join(' ');
+                  return <div key={i} className="text-[10px] font-mono"><span className="text-[var(--color-text-dim)]">{label}</span> <span className="text-[var(--color-green)] font-bold">{parseFloat(m.value).toFixed(2)}</span></div>;
+                })}
+              </div>
+            )}
+            {logs.length > 0 && (
+              <div className="ml-3.5 text-[10px] text-[var(--color-text-dim)]">{logs.length} log entries found</div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
