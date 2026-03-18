@@ -503,8 +503,8 @@ export default function LiveTab() {
         })}
       </div>
 
-      {/* Dual Stream: Metrics + Logs — Write Once, Query Everything */}
-      <MetricStream />
+      {/* Unified Feed: Metrics + Logs interleaved — Write Once, Query Everything */}
+      <UnifiedFeed />
 
       {/* Log stream */}
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden">
@@ -704,96 +704,182 @@ function Spark({ data, color = 'var(--color-accent)' }: { data: number[]; color?
   );
 }
 
-// --- Metric Stream: Live metric data from diverse sources ---
+// --- Unified Feed: Metrics + Logs interleaved, proving "Write Once, Query Everything" ---
 
-interface MetricStreamEntry {
+interface FeedItem {
+  type: 'metric' | 'log';
   source: string;
   color: string;
   uniql: string;
-  label: string;
-  value: string;
-  labels: string;
-  ms: number;
+  ts: string;
+  content: string;
+  value?: string;
+  badge?: string;
+  badgeColor?: string;
 }
 
-const METRIC_QUERIES = [
-  { source: 'vCenter', color: '#7c5cfc', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "vsphere_host_cpu_usage_average" WITHIN last 5m', label: 'ESXi CPU', extract: (r: MetricResult[]) => r.slice(0, 3).map(x => ({ val: parseFloat(x.value?.[1] || '0').toFixed(1) + '%', labels: x.metric.esxhostname || '?' })) },
-  { source: 'vCenter', color: '#9b7cf2', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "vsphere_host_mem_usage_average" WITHIN last 5m', label: 'ESXi Memory', extract: (r: MetricResult[]) => r.slice(0, 3).map(x => ({ val: parseFloat(x.value?.[1] || '0').toFixed(1) + '%', labels: x.metric.esxhostname || '?' })) },
-  { source: 'SNMP', color: '#39d0d8', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "count(snmpv2_device_up==1)"', label: 'Devices Online', extract: (r: MetricResult[]) => r.map(x => ({ val: x.value?.[1] || '0', labels: 'all' })) },
-  { source: 'Platform', color: '#3fb950', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "up"', label: 'Service Health', extract: (r: MetricResult[]) => r.slice(0, 5).map(x => ({ val: x.value?.[1] === '1' ? 'UP' : 'DOWN', labels: x.metric.job || '?' })) },
-  { source: 'PostgreSQL', color: '#336791', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "pg_stat_activity_count"', label: 'Active Connections', extract: (r: MetricResult[]) => r.slice(0, 3).map(x => ({ val: x.value?.[1] || '0', labels: x.metric.datname || x.metric.job || '?' })) },
-  { source: 'Telegraf', color: '#00b4d8', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "vsphere_vm_cpu_usage_average" WITHIN last 5m', label: 'VM CPU Top 5', extract: (r: MetricResult[]) => r.sort((a, b) => parseFloat(b.value?.[1] || '0') - parseFloat(a.value?.[1] || '0')).slice(0, 5).map(x => ({ val: parseFloat(x.value?.[1] || '0').toFixed(1) + '%', labels: x.metric.vmname || '?' })) },
-];
-
-function MetricStream() {
-  const [entries, setEntries] = useState<MetricStreamEntry[]>([]);
+function UnifiedFeed() {
+  const [items, setItems] = useState<FeedItem[]>([]);
+  const [queryCount, setQueryCount] = useState(0);
   const [totalMs, setTotalMs] = useState(0);
 
   useEffect(() => {
-    const fetchAll = async () => {
+    const fetchFeed = async () => {
       const start = performance.now();
-      const results = await Promise.allSettled(
-        METRIC_QUERIES.map(async (q) => {
-          const resp = await fetch(`${ENGINE_URL}/v1/query`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query: q.uniql }),
-          });
-          const json = await resp.json();
-          const metricResults: MetricResult[] = json?.data?.data?.result ?? [];
-          const ms = json?.metadata?.total_time_ms ?? 0;
-          const extracted = q.extract(metricResults);
-          return extracted.map(e => ({
-            source: q.source,
-            color: q.color,
-            uniql: q.uniql,
-            label: q.label,
-            value: e.val,
-            labels: e.labels,
-            ms,
-          }));
-        })
-      );
+      const now = new Date();
+      const ts = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-      const allEntries: MetricStreamEntry[] = [];
-      for (const r of results) {
-        if (r.status === 'fulfilled') allEntries.push(...r.value);
+      // 4 parallel UNIQL queries: 2 metric + 2 log → different backends, same syntax
+      const [esxiRes, serviceRes, fgtRes, fssoRes] = await Promise.allSettled([
+        fetch(`${ENGINE_URL}/v1/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'SHOW timeseries FROM victoria WHERE __name__ = "vsphere_host_cpu_usage_average"' }) }).then(r => r.json()),
+        fetch(`${ENGINE_URL}/v1/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'SHOW timeseries FROM victoria WHERE __name__ = "up"' }) }).then(r => r.json()),
+        fetch(`${ENGINE_URL}/v1/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'SHOW table FROM vlogs WHERE job = "fortigate" WITHIN last 30s', limit: 8 }) }).then(r => r.json()),
+        fetch(`${ENGINE_URL}/v1/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'SHOW table FROM vlogs WHERE job = "fsso" WITHIN last 30s', limit: 5 }) }).then(r => r.json()),
+      ]);
+
+      const feed: FeedItem[] = [];
+
+      // ESXi metrics
+      if (esxiRes.status === 'fulfilled') {
+        const results: MetricResult[] = esxiRes.value?.data?.data?.result ?? [];
+        // Pick top 3 by CPU
+        const sorted = [...results].sort((a, b) => parseFloat(b.value?.[1] || '0') - parseFloat(a.value?.[1] || '0'));
+        for (const r of sorted.slice(0, 3)) {
+          const cpu = parseFloat(r.value?.[1] || '0');
+          feed.push({
+            type: 'metric', source: 'vCenter', color: '#7c5cfc',
+            uniql: 'FROM victoria WHERE __name__="vsphere_host_cpu_usage_average"',
+            ts, content: r.metric.esxhostname || '?',
+            value: cpu.toFixed(1) + '%',
+            badge: cpu > 50 ? 'HIGH' : cpu > 20 ? 'MEDIUM' : 'LOW',
+            badgeColor: cpu > 50 ? 'var(--color-red)' : cpu > 20 ? 'var(--color-amber)' : 'var(--color-green)',
+          });
+        }
       }
-      setEntries(allEntries);
+
+      // Service health
+      if (serviceRes.status === 'fulfilled') {
+        const results: MetricResult[] = serviceRes.value?.data?.data?.result ?? [];
+        const down = results.filter(r => r.value?.[1] !== '1');
+        const upCount = results.filter(r => r.value?.[1] === '1').length;
+        feed.push({
+          type: 'metric', source: 'Platform', color: '#3fb950',
+          uniql: 'FROM victoria WHERE __name__="up"',
+          ts, content: `${upCount}/${results.length} services healthy`,
+          value: `${upCount}/${results.length}`,
+          badge: down.length > 0 ? 'DEGRADED' : 'HEALTHY',
+          badgeColor: down.length > 0 ? 'var(--color-red)' : 'var(--color-green)',
+        });
+        // Show down services individually
+        for (const d of down) {
+          feed.push({
+            type: 'metric', source: 'Platform', color: '#e03c31',
+            uniql: 'FROM victoria WHERE __name__="up"',
+            ts, content: `${d.metric.job || '?'} is DOWN`,
+            badge: 'DOWN', badgeColor: 'var(--color-red)',
+          });
+        }
+      }
+
+      // FortiGate logs
+      if (fgtRes.status === 'fulfilled') {
+        const data = fgtRes.value?.data;
+        const cols: string[] = data?.columns ?? [];
+        const rows: unknown[][] = data?.rows ?? [];
+        const msgIdx = cols.indexOf('_msg');
+        const actionIdx = cols.indexOf('action');
+        const subtypeIdx = cols.indexOf('subtype');
+        const timeIdx = cols.indexOf('_time');
+        const srcIpIdx = cols.indexOf('source_ip');
+        for (const row of rows.slice(0, 5)) {
+          const action = actionIdx >= 0 ? (row[actionIdx] as string) : '';
+          const logTs = timeIdx >= 0 ? new Date(row[timeIdx] as string).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ts;
+          const subtype = subtypeIdx >= 0 ? (row[subtypeIdx] as string) : '';
+          const srcIp = srcIpIdx >= 0 ? (row[srcIpIdx] as string) : '';
+          const msg = msgIdx >= 0 ? (row[msgIdx] as string || '').slice(0, 100) : '';
+          feed.push({
+            type: 'log', source: 'FortiGate', color: '#e09c5e',
+            uniql: 'FROM vlogs WHERE job="fortigate"',
+            ts: logTs, content: `${subtype} ${srcIp} ${msg}`.trim(),
+            badge: action, badgeColor: action === 'deny' ? 'var(--color-red)' : action === 'accept' ? 'var(--color-green)' : 'var(--color-text-dim)',
+          });
+        }
+      }
+
+      // FSSO logs
+      if (fssoRes.status === 'fulfilled') {
+        const data = fssoRes.value?.data;
+        const cols: string[] = data?.columns ?? [];
+        const rows: unknown[][] = data?.rows ?? [];
+        const msgIdx = cols.indexOf('_msg');
+        const timeIdx = cols.indexOf('_time');
+        for (const row of rows.slice(0, 3)) {
+          const logTs = timeIdx >= 0 ? new Date(row[timeIdx] as string).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ts;
+          const msg = msgIdx >= 0 ? (row[msgIdx] as string || '').slice(0, 120) : '';
+          feed.push({
+            type: 'log', source: 'FSSO', color: '#40c8d0',
+            uniql: 'FROM vlogs WHERE job="fsso"',
+            ts: logTs, content: msg,
+            badge: 'SSO', badgeColor: 'var(--color-cyan)',
+          });
+        }
+      }
+
+      setItems(feed);
+      setQueryCount(4);
       setTotalMs(Math.round(performance.now() - start));
     };
 
-    fetchAll();
-    const interval = setInterval(fetchAll, 15_000);
+    fetchFeed();
+    const interval = setInterval(fetchFeed, 10_000);
     return () => clearInterval(interval);
   }, []);
 
-  if (entries.length === 0) return null;
+  if (items.length === 0) return null;
 
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden">
       <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-3)]">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-[var(--color-accent)] tracking-wider">METRIC STREAM</span>
-          <span className="text-[10px] text-[var(--color-green)] font-mono">LIVE ({entries.length})</span>
+          <span className="text-xs font-semibold text-[var(--color-accent)] tracking-wider">UNIFIED FEED</span>
+          <span className="text-[10px] text-[var(--color-green)] font-mono">
+            {items.filter(i => i.type === 'metric').length} metrics + {items.filter(i => i.type === 'log').length} logs
+          </span>
         </div>
         <div className="flex items-center gap-3 text-[10px] text-[var(--color-text-dim)] font-mono">
-          <span>{totalMs}ms total</span>
-          <span className="text-[var(--color-text-dim)]">VictoriaMetrics via UNIQL</span>
+          <span>{queryCount} UNIQL queries</span>
+          <span>{totalMs}ms</span>
+          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]" /> PromQL</span>
+          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[var(--color-amber)]" /> LogsQL</span>
         </div>
       </div>
-      <div className="max-h-52 overflow-y-auto divide-y divide-[var(--color-border)]/30">
-        {entries.map((e, i) => (
-          <div key={i} className="px-4 py-1 hover:bg-[var(--color-surface-3)] transition-colors flex items-center gap-2">
-            <span className="text-[8px] font-mono px-1.5 py-0.5 rounded shrink-0" style={{ background: `${e.color}18`, color: e.color, border: `1px solid ${e.color}40` }}>
-              {e.source}
+      <div className="max-h-72 overflow-y-auto">
+        {items.map((item, i) => (
+          <div key={i} className="px-4 py-1.5 hover:bg-[var(--color-surface-3)] transition-colors flex items-center gap-2 border-b border-[var(--color-border)]/20">
+            {/* Type indicator */}
+            <span className={`w-1 h-4 rounded-full shrink-0 ${item.type === 'metric' ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-amber)]'}`} />
+            {/* Timestamp */}
+            <span className="text-[9px] text-[var(--color-text-dim)] font-mono shrink-0 w-[50px]">{item.ts}</span>
+            {/* Source badge */}
+            <span className="text-[8px] font-bold font-mono px-1.5 py-0.5 rounded shrink-0 min-w-[52px] text-center" style={{ background: `${item.color}18`, color: item.color, border: `1px solid ${item.color}40` }}>
+              {item.source}
             </span>
-            <span className="text-[10px] text-[var(--color-text-dim)] font-mono shrink-0 w-28 truncate">{e.label}</span>
-            <span className="text-[10px] text-[var(--color-text)] font-mono truncate flex-1">{e.labels}</span>
-            <span className="text-[10px] font-bold font-mono shrink-0" style={{ color: e.value === 'UP' ? 'var(--color-green)' : e.value === 'DOWN' ? 'var(--color-red)' : e.color }}>
-              {e.value}
+            {/* Action/status badge */}
+            {item.badge && (
+              <span className="text-[8px] font-bold font-mono px-1.5 py-0.5 rounded shrink-0" style={{ background: `${item.badgeColor}18`, color: item.badgeColor }}>
+                {item.badge}
+              </span>
+            )}
+            {/* Content */}
+            <span className="text-[10px] text-[var(--color-text)] font-mono truncate flex-1 min-w-0">
+              {item.content}
             </span>
-            <span className="text-[8px] text-[var(--color-text-dim)] font-mono shrink-0 w-8 text-right">{e.ms}ms</span>
+            {/* Value (metrics only) */}
+            {item.value && (
+              <span className="text-[10px] font-bold font-mono shrink-0 tabular-nums" style={{ color: item.color }}>
+                {item.value}
+              </span>
+            )}
           </div>
         ))}
       </div>
