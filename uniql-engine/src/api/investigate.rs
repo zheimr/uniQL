@@ -90,6 +90,133 @@ fn substitute_params(query: &str, params: &HashMap<String, String>) -> String {
     result
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── get_pack_queries ───────────────────────────────────────────────
+
+    #[test]
+    fn pack_high_cpu_exists() {
+        let queries = get_pack_queries("high_cpu").unwrap();
+        assert_eq!(queries.len(), 3);
+        assert!(queries.iter().any(|(name, _)| *name == "host_cpu_trend"));
+        assert!(queries.iter().any(|(name, _)| *name == "vm_cpu_on_host"));
+        assert!(queries.iter().any(|(name, _)| *name == "host_memory"));
+    }
+
+    #[test]
+    fn pack_error_spike_exists() {
+        let queries = get_pack_queries("error_spike").unwrap();
+        assert_eq!(queries.len(), 3);
+        assert!(queries.iter().any(|(name, _)| *name == "soc_event_rate"));
+        assert!(queries.iter().any(|(name, _)| *name == "error_logs"));
+        assert!(queries.iter().any(|(name, _)| *name == "api_errors"));
+    }
+
+    #[test]
+    fn pack_latency_degradation_exists() {
+        let queries = get_pack_queries("latency_degradation").unwrap();
+        assert_eq!(queries.len(), 3);
+    }
+
+    #[test]
+    fn pack_link_down_exists() {
+        let queries = get_pack_queries("link_down").unwrap();
+        assert_eq!(queries.len(), 3);
+    }
+
+    #[test]
+    fn pack_unknown_returns_none() {
+        assert!(get_pack_queries("nonexistent_pack").is_none());
+    }
+
+    #[test]
+    fn pack_custom_returns_none() {
+        // "custom" is handled differently, not via get_pack_queries
+        assert!(get_pack_queries("custom").is_none());
+    }
+
+    // ─── substitute_params ──────────────────────────────────────────────
+
+    #[test]
+    fn substitute_single_param() {
+        let result = substitute_params("WHERE host = \"$host\"", &HashMap::from([
+            ("host".to_string(), "srv-01".to_string()),
+        ]));
+        assert_eq!(result, "WHERE host = \"srv-01\"");
+    }
+
+    #[test]
+    fn substitute_multiple_params() {
+        let mut params = HashMap::new();
+        params.insert("host".to_string(), "srv-01".to_string());
+        params.insert("service".to_string(), "nginx".to_string());
+        let result = substitute_params("WHERE host = \"$host\" AND job = \"$service\"", &params);
+        assert!(result.contains("srv-01"));
+        assert!(result.contains("nginx"));
+        assert!(!result.contains("$host"));
+        assert!(!result.contains("$service"));
+    }
+
+    #[test]
+    fn substitute_no_params() {
+        let result = substitute_params("FROM metrics WHERE __name__ = \"up\"", &HashMap::new());
+        assert_eq!(result, "FROM metrics WHERE __name__ = \"up\"");
+    }
+
+    #[test]
+    fn substitute_param_not_in_query() {
+        let mut params = HashMap::new();
+        params.insert("notused".to_string(), "value".to_string());
+        let result = substitute_params("FROM metrics", &params);
+        assert_eq!(result, "FROM metrics");
+    }
+
+    #[test]
+    fn substitute_param_appears_multiple_times() {
+        let mut params = HashMap::new();
+        params.insert("host".to_string(), "srv-01".to_string());
+        let result = substitute_params("$host and $host", &params);
+        assert_eq!(result, "srv-01 and srv-01");
+    }
+
+    // ─── Pack queries contain $param placeholders ───────────────────────
+
+    #[test]
+    fn high_cpu_queries_use_host_param() {
+        let queries = get_pack_queries("high_cpu").unwrap();
+        for (_, query) in &queries {
+            assert!(query.contains("$host"), "Query should contain $host: {}", query);
+        }
+    }
+
+    #[test]
+    fn error_spike_queries_use_service_param() {
+        let queries = get_pack_queries("error_spike").unwrap();
+        let has_service = queries.iter().any(|(_, q)| q.contains("$service"));
+        assert!(has_service, "At least one error_spike query should use $service");
+    }
+
+    #[test]
+    fn pack_queries_are_valid_uniql() {
+        // All pack templates (with params substituted) should be parseable
+        let packs = vec!["high_cpu", "error_spike", "latency_degradation", "link_down"];
+        let mut params = HashMap::new();
+        params.insert("host".to_string(), "test-host".to_string());
+        params.insert("service".to_string(), "test-service".to_string());
+
+        for pack in packs {
+            let queries = get_pack_queries(pack).unwrap();
+            for (name, tmpl) in &queries {
+                let query = substitute_params(tmpl, &params);
+                let result = uniql_core::parse(&query);
+                assert!(result.is_ok(), "Pack '{}' query '{}' failed to parse: {:?}\nQuery: {}", pack, name, result.err(), query);
+            }
+        }
+    }
+}
+
 // ─── Handler ─────────────────────────────────────────────────────────────────
 
 pub async fn handle_investigate(

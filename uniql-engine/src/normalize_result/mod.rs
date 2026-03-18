@@ -251,4 +251,267 @@ mod tests {
         let epoch = parse_timestamp_to_epoch("2000-01-01T00:00:00Z").unwrap();
         assert!((epoch - 946684800.0).abs() < 1.0);
     }
+
+    #[test]
+    fn test_parse_timestamp_positive_tz_offset() {
+        // 2000-01-01T03:00:00+03:00 should equal epoch 946684800 (same as midnight UTC)
+        let epoch = parse_timestamp_to_epoch("2000-01-01T03:00:00+03:00").unwrap();
+        assert!((epoch - 946684800.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_parse_timestamp_negative_tz_offset() {
+        // 1999-12-31T19:00:00-05:00 should equal epoch 946684800
+        let epoch = parse_timestamp_to_epoch("1999-12-31T19:00:00-05:00").unwrap();
+        assert!((epoch - 946684800.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_parse_timestamp_whitespace_trimmed() {
+        let epoch = parse_timestamp_to_epoch("  1970-01-01T00:00:00Z  ").unwrap();
+        assert!((epoch - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_parse_timestamp_missing_t_separator() {
+        assert!(parse_timestamp_to_epoch("2026-03-17 20:31:36Z").is_none());
+    }
+
+    #[test]
+    fn test_parse_timestamp_incomplete_time() {
+        assert!(parse_timestamp_to_epoch("2026-03-17T20:31").is_none());
+    }
+
+    // ─── get_normalizer ─────────────────────────────────────────────────
+
+    #[test]
+    fn get_normalizer_prometheus() {
+        let _n = get_normalizer("prometheus");
+        let _n2 = get_normalizer("victoriametrics");
+    }
+
+    #[test]
+    fn get_normalizer_victorialogs() {
+        let _n = get_normalizer("victorialogs");
+    }
+
+    #[test]
+    fn get_normalizer_unknown_defaults_to_prometheus() {
+        let _n = get_normalizer("unknown_backend");
+    }
+
+    // ─── PrometheusResultNormalizer ─────────────────────────────────────
+
+    #[test]
+    fn prometheus_normalizer_basic() {
+        let result = BackendResult {
+            data: serde_json::json!({
+                "data": {
+                    "resultType": "vector",
+                    "result": [
+                        {
+                            "metric": {"__name__": "up", "instance": "localhost:9090"},
+                            "value": [1710000000.0, "1"]
+                        }
+                    ]
+                }
+            }),
+            backend_name: "victoria".to_string(),
+            backend_type: "prometheus".to_string(),
+            native_query: "up".to_string(),
+            execute_time_ms: 10,
+        };
+
+        let normalizer = PrometheusResultNormalizer;
+        let normalized = normalizer.normalize(&result, "metrics");
+
+        assert_eq!(normalized.backend_name, "victoria");
+        assert_eq!(normalized.backend_type, "prometheus");
+        assert_eq!(normalized.signal_type, "metrics");
+        assert_eq!(normalized.rows.len(), 1);
+
+        let row = &normalized.rows[0];
+        assert_eq!(row.labels.get("__name__").unwrap(), "up");
+        assert_eq!(row.labels.get("instance").unwrap(), "localhost:9090");
+        assert_eq!(row.value.as_deref(), Some("1"));
+        assert!((row.timestamp_epoch.unwrap() - 1710000000.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn prometheus_normalizer_empty_result() {
+        let result = BackendResult {
+            data: serde_json::json!({"data": {"result": []}}),
+            backend_name: "vm".to_string(),
+            backend_type: "prometheus".to_string(),
+            native_query: "nonexistent".to_string(),
+            execute_time_ms: 1,
+        };
+        let normalized = PrometheusResultNormalizer.normalize(&result, "metrics");
+        assert_eq!(normalized.rows.len(), 0);
+    }
+
+    #[test]
+    fn prometheus_normalizer_no_data_field() {
+        let result = BackendResult {
+            data: serde_json::json!({"status": "error"}),
+            backend_name: "vm".to_string(),
+            backend_type: "prometheus".to_string(),
+            native_query: "bad".to_string(),
+            execute_time_ms: 1,
+        };
+        let normalized = PrometheusResultNormalizer.normalize(&result, "metrics");
+        assert_eq!(normalized.rows.len(), 0);
+    }
+
+    #[test]
+    fn prometheus_normalizer_multiple_results() {
+        let result = BackendResult {
+            data: serde_json::json!({
+                "data": {
+                    "result": [
+                        {"metric": {"host": "a"}, "value": [100.0, "10"]},
+                        {"metric": {"host": "b"}, "value": [200.0, "20"]},
+                        {"metric": {"host": "c"}, "value": [300.0, "30"]},
+                    ]
+                }
+            }),
+            backend_name: "vm".to_string(),
+            backend_type: "prometheus".to_string(),
+            native_query: "cpu".to_string(),
+            execute_time_ms: 5,
+        };
+        let normalized = PrometheusResultNormalizer.normalize(&result, "metrics");
+        assert_eq!(normalized.rows.len(), 3);
+        assert_eq!(normalized.rows[0].labels.get("host").unwrap(), "a");
+        assert_eq!(normalized.rows[1].value.as_deref(), Some("20"));
+        assert!((normalized.rows[2].timestamp_epoch.unwrap() - 300.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn prometheus_normalizer_no_value_field() {
+        let result = BackendResult {
+            data: serde_json::json!({
+                "data": {"result": [{"metric": {"host": "x"}}]}
+            }),
+            backend_name: "vm".to_string(),
+            backend_type: "prometheus".to_string(),
+            native_query: "q".to_string(),
+            execute_time_ms: 1,
+        };
+        let normalized = PrometheusResultNormalizer.normalize(&result, "metrics");
+        assert_eq!(normalized.rows.len(), 1);
+        assert!(normalized.rows[0].timestamp.is_none());
+        assert!(normalized.rows[0].value.is_none());
+    }
+
+    // ─── VictoriaLogsResultNormalizer ───────────────────────────────────
+
+    #[test]
+    fn victorialogs_normalizer_basic() {
+        let result = BackendResult {
+            data: serde_json::json!({
+                "result": [
+                    {
+                        "_msg": "Connection refused",
+                        "_time": "2026-03-17T20:31:36Z",
+                        "host": "srv-01",
+                        "job": "nginx"
+                    }
+                ]
+            }),
+            backend_name: "vlogs".to_string(),
+            backend_type: "victorialogs".to_string(),
+            native_query: "error".to_string(),
+            execute_time_ms: 5,
+        };
+
+        let normalizer = VictoriaLogsResultNormalizer;
+        let normalized = normalizer.normalize(&result, "logs");
+
+        assert_eq!(normalized.backend_name, "vlogs");
+        assert_eq!(normalized.signal_type, "logs");
+        assert_eq!(normalized.rows.len(), 1);
+
+        let row = &normalized.rows[0];
+        assert_eq!(row.value.as_deref(), Some("Connection refused"));
+        assert_eq!(row.timestamp.as_deref(), Some("2026-03-17T20:31:36Z"));
+        assert!(row.timestamp_epoch.is_some());
+        assert_eq!(row.labels.get("host").unwrap(), "srv-01");
+        assert_eq!(row.labels.get("job").unwrap(), "nginx");
+    }
+
+    #[test]
+    fn victorialogs_normalizer_empty() {
+        let result = BackendResult {
+            data: serde_json::json!({"result": []}),
+            backend_name: "vlogs".to_string(),
+            backend_type: "victorialogs".to_string(),
+            native_query: "q".to_string(),
+            execute_time_ms: 1,
+        };
+        let normalized = VictoriaLogsResultNormalizer.normalize(&result, "logs");
+        assert_eq!(normalized.rows.len(), 0);
+    }
+
+    #[test]
+    fn victorialogs_normalizer_no_time_field() {
+        let result = BackendResult {
+            data: serde_json::json!({"result": [{"_msg": "hello"}]}),
+            backend_name: "vlogs".to_string(),
+            backend_type: "victorialogs".to_string(),
+            native_query: "q".to_string(),
+            execute_time_ms: 1,
+        };
+        let normalized = VictoriaLogsResultNormalizer.normalize(&result, "logs");
+        assert_eq!(normalized.rows.len(), 1);
+        assert!(normalized.rows[0].timestamp.is_none());
+        assert!(normalized.rows[0].timestamp_epoch.is_none());
+    }
+
+    #[test]
+    fn victorialogs_normalizer_no_msg_field() {
+        let result = BackendResult {
+            data: serde_json::json!({"result": [{"_time": "2026-03-17T20:31:36Z", "host": "x"}]}),
+            backend_name: "vlogs".to_string(),
+            backend_type: "victorialogs".to_string(),
+            native_query: "q".to_string(),
+            execute_time_ms: 1,
+        };
+        let normalized = VictoriaLogsResultNormalizer.normalize(&result, "logs");
+        assert_eq!(normalized.rows.len(), 1);
+        assert!(normalized.rows[0].value.is_none());
+    }
+
+    #[test]
+    fn victorialogs_normalizer_multiple_results() {
+        let result = BackendResult {
+            data: serde_json::json!({
+                "result": [
+                    {"_msg": "a", "_time": "2026-03-17T10:00:00Z"},
+                    {"_msg": "b", "_time": "2026-03-17T11:00:00Z"},
+                ]
+            }),
+            backend_name: "vlogs".to_string(),
+            backend_type: "victorialogs".to_string(),
+            native_query: "q".to_string(),
+            execute_time_ms: 3,
+        };
+        let normalized = VictoriaLogsResultNormalizer.normalize(&result, "logs");
+        assert_eq!(normalized.rows.len(), 2);
+        assert_eq!(normalized.rows[0].value.as_deref(), Some("a"));
+        assert_eq!(normalized.rows[1].value.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn victorialogs_normalizer_no_result_key() {
+        let result = BackendResult {
+            data: serde_json::json!({"status": "error"}),
+            backend_name: "vlogs".to_string(),
+            backend_type: "victorialogs".to_string(),
+            native_query: "q".to_string(),
+            execute_time_ms: 1,
+        };
+        let normalized = VictoriaLogsResultNormalizer.normalize(&result, "logs");
+        assert_eq!(normalized.rows.len(), 0);
+    }
 }
