@@ -95,16 +95,19 @@ pub fn plan(ast: &Query, config: &EngineConfig) -> Result<QueryPlan, PlanError> 
                 message: format!("No transpiler for '{}'", transpiler_name),
             })?;
 
-        let output = match uniql_core::bind::bind(&signal_ast)
-            .and_then(|bound| uniql_core::normalize::normalize(bound).map_err(|e| e.to_string()))
-        {
+        // Bind first — propagate bind errors (arithmetic in WHERE, etc.)
+        let bound = uniql_core::bind::bind(&signal_ast).map_err(|e| PlanError {
+            message: format!("Bind error for {}: {}", signal_str, e),
+        })?;
+
+        let output = match uniql_core::normalize::normalize(bound) {
             Ok(normalized) => {
                 transpiler_impl.transpile_normalized(&normalized).map_err(|e| PlanError {
                     message: format!("Transpile error for {}: {}", signal_str, e),
                 })?
             }
             Err(_) => {
-                // Fallback to legacy path
+                // Normalize failed — fallback to legacy transpile (skip normalized path)
                 transpiler_impl.transpile(&signal_ast).map_err(|e| PlanError {
                     message: format!("Transpile error for {}: {}", signal_str, e),
                 })?

@@ -627,8 +627,15 @@ fn transpile_from_normalized(nq: &NormalizedQuery) -> Result<String, TranspileEr
     // HAVING → filter pipe (uses normalized HAVING — fixes hardcoded "count(*)" bug)
     if let Some(ref having) = nq.having {
         if let Some(ref full) = having.full_expr {
-            // Compound HAVING (AND/OR) — use full expression
-            builder.pipe_stages.push(format!("filter {}", full));
+            // Compound HAVING — LogsQL doesn't support AND/OR in a single filter pipe.
+            // Split AND into separate filter pipes; OR stays as single (VLogs supports `or` in filter).
+            if having.op == "AND" {
+                for part in full.split(" AND ") {
+                    builder.pipe_stages.push(format!("filter {}", part.trim()));
+                }
+            } else {
+                builder.pipe_stages.push(format!("filter {}", full));
+            }
         } else if !having.op.is_empty() {
             // Simple HAVING — use aggregate function ref
             let stats_ref = having.aggregate_func.as_deref()
