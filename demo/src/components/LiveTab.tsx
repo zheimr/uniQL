@@ -503,6 +503,9 @@ export default function LiveTab() {
         })}
       </div>
 
+      {/* Data Sources Grid */}
+      <DataSourcesGrid />
+
       {/* Log stream */}
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden">
         <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-3)]">
@@ -698,6 +701,107 @@ function Spark({ data, color = 'var(--color-accent)' }: { data: number[]; color?
         <circle cx={w} cy={h - ((data[data.length - 1] - min) / range) * (h - 4) - 2} r="2" fill={color} />
       )}
     </svg>
+  );
+}
+
+// --- Data Sources Grid ---
+
+interface DataSourceInfo {
+  name: string;
+  type: 'metrics' | 'logs';
+  icon: string;
+  color: string;
+  uniql: string;
+  count: number | null;
+  loading: boolean;
+}
+
+const DATA_SOURCE_DEFS = [
+  { name: 'SNMP Devices', type: 'metrics' as const, icon: 'N', color: '#39d0d8', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "snmpv2_device_up"' },
+  { name: 'ESXi Hosts', type: 'metrics' as const, icon: 'H', color: '#d29922', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "vsphere_host_cpu_usage_average"' },
+  { name: 'vSphere VMs', type: 'metrics' as const, icon: 'V', color: '#7c5cfc', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "vsphere_vm_cpu_usage_average"' },
+  { name: 'Platform', type: 'metrics' as const, icon: 'S', color: '#3fb950', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "up"' },
+  { name: 'PostgreSQL', type: 'metrics' as const, icon: 'P', color: '#336791', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "pg_up"' },
+  { name: 'Valkey', type: 'metrics' as const, icon: 'R', color: '#e03c31', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "redis_up_info"' },
+  { name: 'Telegraf', type: 'metrics' as const, icon: 'T', color: '#00b4d8', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "internal_agent_go_goroutines" AND job = "telegraf"' },
+  { name: 'FortiGate Logs', type: 'logs' as const, icon: 'F', color: '#e09c5e', uniql: 'SHOW table FROM vlogs WHERE job = "fortigate" WITHIN last 1m' },
+  { name: 'FSSO Logs', type: 'logs' as const, icon: 'A', color: '#40c8d0', uniql: 'SHOW table FROM vlogs WHERE job = "fsso" WITHIN last 1m' },
+];
+
+function DataSourcesGrid() {
+  const [sources, setSources] = useState<DataSourceInfo[]>(
+    DATA_SOURCE_DEFS.map(d => ({ ...d, count: null, loading: true }))
+  );
+
+  useEffect(() => {
+    const fetchAll = async () => {
+      const results = await Promise.allSettled(
+        DATA_SOURCE_DEFS.map(async (def) => {
+          const resp = await fetch(`${ENGINE_URL}/v1/query`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: def.uniql }),
+          });
+          const json = await resp.json();
+          if (def.type === 'logs') {
+            const rows = json?.data?.rows || json?.data?.result || [];
+            return rows.length;
+          }
+          const result = json?.data?.data?.result || [];
+          return result.length;
+        })
+      );
+
+      setSources(prev => prev.map((s, i) => ({
+        ...s,
+        count: results[i].status === 'fulfilled' ? (results[i] as PromiseFulfilledResult<number>).value : 0,
+        loading: false,
+      })));
+    };
+
+    fetchAll();
+    const interval = setInterval(fetchAll, 30_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-xs font-semibold text-[var(--color-text-dim)] uppercase tracking-wider">Data Sources — queried via UNIQL</span>
+        <div className="flex items-center gap-3 text-[9px] text-[var(--color-text-dim)]">
+          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]" /> Metrics (VictoriaMetrics)</span>
+          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[var(--color-amber)]" /> Logs (VictoriaLogs)</span>
+        </div>
+      </div>
+      <div className="grid grid-cols-3 lg:grid-cols-5 xl:grid-cols-9 gap-2">
+        {sources.map((s) => (
+          <div
+            key={s.name}
+            className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-3)] p-2.5 text-center transition-all hover:border-[var(--color-border-bright)]"
+          >
+            <div
+              className="w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-bold mx-auto mb-1.5"
+              style={{ background: `${s.color}18`, color: s.color, border: `1px solid ${s.color}40` }}
+            >
+              {s.icon}
+            </div>
+            <div className="text-[10px] text-[var(--color-text)] font-medium truncate">{s.name}</div>
+            <div className="text-sm font-bold font-mono mt-0.5" style={{ color: s.color }}>
+              {s.loading ? (
+                <span className="text-[var(--color-text-dim)]">...</span>
+              ) : s.count != null && s.count > 0 ? (
+                s.count.toLocaleString()
+              ) : (
+                <span className="text-[var(--color-text-dim)]">-</span>
+              )}
+            </div>
+            <div className="text-[8px] text-[var(--color-text-dim)] mt-0.5">
+              {s.type === 'logs' ? 'entries/min' : 'series'}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
