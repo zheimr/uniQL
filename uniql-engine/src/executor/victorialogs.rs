@@ -1,4 +1,4 @@
-use super::{BackendResult, ExecutionError};
+use super::{BackendResult, ExecutionError, MAX_RETRIES, RETRY_DELAY_MS, is_retryable_reqwest_error};
 use reqwest::Client;
 use std::time::Instant;
 
@@ -32,7 +32,7 @@ impl VictoriaLogsExecutor {
         self.query_range(logsql, limit, start, "").await
     }
 
-    /// Execute a LogsQL query with explicit time range: GET /select/logsql/query
+    /// Execute a LogsQL query with explicit time range (with retry on transient failures)
     pub async fn query_range(
         &self,
         logsql: &str,
@@ -52,15 +52,9 @@ impl VictoriaLogsExecutor {
             params.push(("end", end.to_string()));
         }
 
-        let resp = self.client
-            .get(&url)
-            .query(&params)
-            .send()
-            .await
-            .map_err(|e| ExecutionError {
-                message: format!("HTTP request failed: {}", e),
-                backend: self.name.clone(),
-            })?;
+        let resp = self.send_with_retry(|| {
+            self.client.get(&url).query(&params)
+        }).await?;
 
         let status = resp.status();
         let body_text = resp.text().await.map_err(|e| ExecutionError {
@@ -103,7 +97,6 @@ impl VictoriaLogsExecutor {
         logsql: &str,
         start: &str,
     ) -> Result<BackendResult, ExecutionError> {
-        // Stats queries use the same endpoint, pipe syntax handles stats
         self.query(logsql, 1000, start).await
     }
 
@@ -114,5 +107,39 @@ impl VictoriaLogsExecutor {
             Ok(resp) => Ok(resp.status().is_success()),
             Err(_) => Ok(false),
         }
+    }
+
+    /// Send an HTTP request with retry on transient failures.
+    async fn send_with_retry<F>(&self, build_request: F) -> Result<reqwest::Response, ExecutionError>
+    where
+        F: Fn() -> reqwest::RequestBuilder,
+    {
+        let mut last_err = None;
+        for attempt in 0..=MAX_RETRIES {
+            match build_request().send().await {
+                Ok(resp) => return Ok(resp),
+                Err(e) => {
+                    if attempt < MAX_RETRIES && is_retryable_reqwest_error(&e) {
+                        tracing::warn!(
+                            backend = %self.name,
+                            attempt = attempt + 1,
+                            "Retryable error, retrying in {}ms: {}",
+                            RETRY_DELAY_MS, e
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
+                        last_err = Some(e);
+                        continue;
+                    }
+                    return Err(ExecutionError {
+                        message: format!("HTTP request failed: {}", e),
+                        backend: self.name.clone(),
+                    });
+                }
+            }
+        }
+        Err(ExecutionError {
+            message: format!("HTTP request failed after {} retries: {}", MAX_RETRIES, last_err.unwrap()),
+            backend: self.name.clone(),
+        })
     }
 }

@@ -40,6 +40,26 @@ async fn main() {
 
     let listen_addr = config.listen.clone();
 
+    // Startup health check: probe all backends
+    for bc in &config.backends {
+        let reachable = match bc.backend_type.as_str() {
+            "prometheus" | "victoriametrics" => {
+                executor::prometheus::PrometheusExecutor::new(&bc.name, &bc.url)
+                    .health().await.unwrap_or(false)
+            }
+            "victorialogs" => {
+                executor::victorialogs::VictoriaLogsExecutor::new(&bc.name, &bc.url)
+                    .health().await.unwrap_or(false)
+            }
+            _ => false,
+        };
+        if reachable {
+            tracing::info!("Backend '{}' ({}) at {} — reachable", bc.name, bc.backend_type, bc.url);
+        } else {
+            tracing::warn!("Backend '{}' ({}) at {} — UNREACHABLE (queries will fail)", bc.name, bc.backend_type, bc.url);
+        }
+    }
+
     // CORS: configurable origins or permissive
     let cors = if config.cors_origins.is_empty() {
         CorsLayer::permissive()

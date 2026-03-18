@@ -1,4 +1,4 @@
-use super::{BackendResult, ExecutionError};
+use super::{BackendResult, ExecutionError, MAX_RETRIES, RETRY_DELAY_MS, is_retryable_reqwest_error};
 use reqwest::Client;
 use std::time::Instant;
 
@@ -22,20 +22,14 @@ impl PrometheusExecutor {
         }
     }
 
-    /// Execute an instant query: GET /api/v1/query
+    /// Execute an instant query: GET /api/v1/query (with retry on transient failures)
     pub async fn query(&self, promql: &str) -> Result<BackendResult, ExecutionError> {
         let url = format!("{}/api/v1/query", self.base_url);
         let start = Instant::now();
 
-        let resp = self.client
-            .get(&url)
-            .query(&[("query", promql)])
-            .send()
-            .await
-            .map_err(|e| ExecutionError {
-                message: format!("HTTP request failed: {}", e),
-                backend: self.name.clone(),
-            })?;
+        let resp = self.send_with_retry(|| {
+            self.client.get(&url).query(&[("query", promql)])
+        }).await?;
 
         let status = resp.status();
         let body: serde_json::Value = resp.json().await.map_err(|e| ExecutionError {
@@ -59,7 +53,7 @@ impl PrometheusExecutor {
         })
     }
 
-    /// Execute a range query: GET /api/v1/query_range
+    /// Execute a range query: GET /api/v1/query_range (with retry on transient failures)
     pub async fn query_range(
         &self,
         promql: &str,
@@ -70,20 +64,14 @@ impl PrometheusExecutor {
         let url = format!("{}/api/v1/query_range", self.base_url);
         let start = Instant::now();
 
-        let resp = self.client
-            .get(&url)
-            .query(&[
+        let resp = self.send_with_retry(|| {
+            self.client.get(&url).query(&[
                 ("query", promql),
                 ("start", start_ts),
                 ("end", end_ts),
                 ("step", step),
             ])
-            .send()
-            .await
-            .map_err(|e| ExecutionError {
-                message: format!("HTTP request failed: {}", e),
-                backend: self.name.clone(),
-            })?;
+        }).await?;
 
         let body: serde_json::Value = resp.json().await.map_err(|e| ExecutionError {
             message: format!("Failed to parse response: {}", e),
@@ -99,12 +87,46 @@ impl PrometheusExecutor {
         })
     }
 
-    /// Health check: GET /health or /api/v1/query?query=1
+    /// Health check: GET /health
     pub async fn health(&self) -> Result<bool, ExecutionError> {
         let url = format!("{}/health", self.base_url);
         match self.client.get(&url).send().await {
             Ok(resp) => Ok(resp.status().is_success()),
             Err(_) => Ok(false),
         }
+    }
+
+    /// Send an HTTP request with retry on transient failures.
+    async fn send_with_retry<F>(&self, build_request: F) -> Result<reqwest::Response, ExecutionError>
+    where
+        F: Fn() -> reqwest::RequestBuilder,
+    {
+        let mut last_err = None;
+        for attempt in 0..=MAX_RETRIES {
+            match build_request().send().await {
+                Ok(resp) => return Ok(resp),
+                Err(e) => {
+                    if attempt < MAX_RETRIES && is_retryable_reqwest_error(&e) {
+                        tracing::warn!(
+                            backend = %self.name,
+                            attempt = attempt + 1,
+                            "Retryable error, retrying in {}ms: {}",
+                            RETRY_DELAY_MS, e
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
+                        last_err = Some(e);
+                        continue;
+                    }
+                    return Err(ExecutionError {
+                        message: format!("HTTP request failed: {}", e),
+                        backend: self.name.clone(),
+                    });
+                }
+            }
+        }
+        Err(ExecutionError {
+            message: format!("HTTP request failed after {} retries: {}", MAX_RETRIES, last_err.unwrap()),
+            backend: self.name.clone(),
+        })
     }
 }

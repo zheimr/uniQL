@@ -219,12 +219,24 @@ fn extract_bound_conditions(
         }
 
         Expr::BinaryOp { left, op, right } => {
-            let label = resolve_label_name(left);
-            let value = resolve_value(right);
+            // Detect arithmetic in WHERE: `cpu + mem > 100` has BinaryOp(Add) as LHS of Gt
+            if contains_arithmetic(left) || contains_arithmetic(right) {
+                return Err(format!(
+                    "Arithmetic expressions in WHERE clause are not supported. Use COMPUTE for calculations."
+                ));
+            }
+
+            // Handle reversed comparisons: `100 < cpu` → normalize to `cpu > 100`
+            let (label, value, bound_op) = if resolve_label_name(left).is_some() {
+                (resolve_label_name(left), resolve_value(right), BoundOp::from_binary_op(op))
+            } else if resolve_label_name(right).is_some() {
+                // Reversed: LHS is a value, RHS is a label → flip
+                (resolve_label_name(right), resolve_value(left), flip_comparison(BoundOp::from_binary_op(op)))
+            } else {
+                (None, None, BoundOp::Eq)
+            };
 
             if let (Some(label), Some(value)) = (label, value) {
-                let bound_op = BoundOp::from_binary_op(op);
-
                 if label == "__name__" && bound_op == BoundOp::Eq {
                     out.push(BoundCondition::MetricName(value));
                 } else if is_stream_label(&label) {
@@ -332,6 +344,30 @@ fn collect_or_values(expr: &Expr) -> Option<BoundOrGroup> {
             }
         }
         _ => None,
+    }
+}
+
+/// Check if an expression contains arithmetic operators (Add/Sub/Mul/Div/Mod).
+fn contains_arithmetic(expr: &Expr) -> bool {
+    match expr {
+        Expr::BinaryOp { op, left, right, .. } => {
+            matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod)
+                || contains_arithmetic(left)
+                || contains_arithmetic(right)
+        }
+        _ => false,
+    }
+}
+
+/// Flip a comparison operator for reversed expressions.
+/// `100 < cpu` → `cpu > 100` (Lt becomes Gt, etc.)
+fn flip_comparison(op: BoundOp) -> BoundOp {
+    match op {
+        BoundOp::Gt => BoundOp::Lt,
+        BoundOp::Lt => BoundOp::Gt,
+        BoundOp::Gte => BoundOp::Lte,
+        BoundOp::Lte => BoundOp::Gte,
+        other => other, // Eq, Neq, Regex — symmetric
     }
 }
 
@@ -487,6 +523,46 @@ mod tests {
         let bound = bind(&ast).unwrap();
         let ff = bound.conditions.iter().find(|c| matches!(c, BoundCondition::FieldFilter { .. }));
         assert!(ff.is_some(), "level should produce FieldFilter, not StreamLabel");
+    }
+
+    #[test]
+    fn test_reversed_comparison_number_lt_label() {
+        // WHERE 100 < cpu → should become cpu > 100
+        let ast = crate::prepare("FROM metrics WHERE __name__ = \"cpu\" AND 100 < usage").unwrap();
+        let bound = bind(&ast).unwrap();
+        let ff = bound.conditions.iter().find(|c| matches!(c, BoundCondition::FieldFilter { name, .. } if name == "usage"));
+        assert!(ff.is_some(), "Reversed comparison should produce FieldFilter for 'usage'");
+        if let Some(BoundCondition::FieldFilter { op, value, .. }) = ff {
+            assert_eq!(*op, BoundOp::Gt, "100 < usage → usage > 100");
+            assert_eq!(value, "100");
+        }
+    }
+
+    #[test]
+    fn test_reversed_comparison_eq_symmetric() {
+        // WHERE "nginx" = service → service = "nginx"
+        let ast = crate::prepare("FROM metrics WHERE __name__ = \"cpu\" AND \"nginx\" = service").unwrap();
+        let bound = bind(&ast).unwrap();
+        let sl = bound.conditions.iter().find(|c| matches!(c, BoundCondition::StreamLabel { name, .. } if name == "service"));
+        assert!(sl.is_some(), "Reversed eq should produce StreamLabel for 'service'");
+    }
+
+    #[test]
+    fn test_arithmetic_in_where_rejected() {
+        let ast = crate::prepare("FROM metrics WHERE __name__ = \"cpu\" AND cpu + mem > 100").unwrap();
+        let result = bind(&ast);
+        assert!(result.is_err(), "Arithmetic in WHERE should be rejected");
+        assert!(result.unwrap_err().contains("Arithmetic"));
+    }
+
+    #[test]
+    fn test_flip_comparison() {
+        assert_eq!(flip_comparison(BoundOp::Gt), BoundOp::Lt);
+        assert_eq!(flip_comparison(BoundOp::Lt), BoundOp::Gt);
+        assert_eq!(flip_comparison(BoundOp::Gte), BoundOp::Lte);
+        assert_eq!(flip_comparison(BoundOp::Lte), BoundOp::Gte);
+        assert_eq!(flip_comparison(BoundOp::Eq), BoundOp::Eq);
+        assert_eq!(flip_comparison(BoundOp::Neq), BoundOp::Neq);
     }
 
     #[test]
