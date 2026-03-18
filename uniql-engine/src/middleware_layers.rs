@@ -139,6 +139,8 @@ mod tests {
                 api_keys: api_keys.into_iter().map(|s| s.to_string()).collect(),
                 cors_origins: vec![],
             },
+            cache: crate::cache::QueryCache::new(100, 15),
+            metrics: crate::api::metrics::EngineMetrics::new(),
         })
     }
 

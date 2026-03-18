@@ -3,6 +3,7 @@ pub mod validate;
 pub mod explain;
 pub mod health;
 pub mod investigate;
+pub mod metrics;
 
 use serde::{Deserialize, Serialize};
 

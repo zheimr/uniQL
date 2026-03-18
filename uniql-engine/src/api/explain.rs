@@ -153,6 +153,8 @@ mod tests {
     fn make_state() -> Arc<AppState> {
         Arc::new(AppState {
             config: EngineConfig::default(),
+            cache: crate::cache::QueryCache::new(100, 15),
+            metrics: crate::api::metrics::EngineMetrics::new(),
         })
     }
 

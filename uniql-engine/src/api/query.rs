@@ -15,6 +15,28 @@ pub async fn handle_query(
     Json(req): Json<QueryRequest>,
 ) -> Result<Json<QueryResponse>, (StatusCode, Json<ErrorResponse>)> {
     let total_start = Instant::now();
+    state.metrics.queries_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+    // 0. Check cache
+    if let Some(cached) = state.cache.get(&req.query).await {
+        state.metrics.queries_cached.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let total_time_ms = total_start.elapsed().as_millis() as u64;
+        return Ok(Json(QueryResponse {
+            status: "success".to_string(),
+            data: cached.data,
+            metadata: QueryMetadata {
+                query_id: uuid::Uuid::new_v4().to_string(),
+                parse_time_us: 0,
+                transpile_time_us: 0,
+                execute_time_ms: 0,
+                total_time_ms,
+                backend: cached.backend,
+                backend_type: cached.backend_type,
+                native_query: cached.native_query,
+                signal_type: cached.signal_type,
+            },
+        }));
+    }
 
     // 1. Parse → Expand → Validate
     let parse_start = Instant::now();
@@ -192,6 +214,12 @@ pub async fn handle_query(
         plan.sub_queries[0].backend_type.clone()
     };
 
+    // Cache the result
+    state.cache.put(
+        &req.query, response_data.clone(), &native_summary,
+        &backend_summary, &backend_type_str, &signal_type_str,
+    ).await;
+
     Ok(Json(QueryResponse {
         status: "success".to_string(),
         data: response_data,
@@ -243,7 +271,7 @@ mod tests {
             api_keys: vec![],
             cors_origins: vec![],
         };
-        (Arc::new(AppState { config }), prom, vlogs)
+        (Arc::new(AppState { config, cache: crate::cache::QueryCache::new(100, 15), metrics: crate::api::metrics::EngineMetrics::new() }), prom, vlogs)
     }
 
     #[tokio::test]
@@ -369,7 +397,7 @@ mod tests {
             api_keys: vec![],
             cors_origins: vec![],
         };
-        let state = Arc::new(AppState { config });
+        let state = Arc::new(AppState { config, cache: crate::cache::QueryCache::new(100, 15), metrics: crate::api::metrics::EngineMetrics::new() });
         let req = QueryRequest { query: "FROM metrics WHERE __name__ = \"up\" WITHIN last 1h".to_string(), format: "json".to_string(), limit: 100 };
         let result = handle_query(State(state), Json(req)).await;
         assert!(result.is_ok());

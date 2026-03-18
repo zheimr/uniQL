@@ -1,4 +1,5 @@
 mod api;
+mod cache;
 mod config;
 mod correlate;
 mod engine;
@@ -70,7 +71,11 @@ async fn main() {
         CorsLayer::new().allow_origin(AllowOrigin::list(origins))
     };
 
-    let state = Arc::new(engine::AppState { config });
+    let cache = cache::QueryCache::new(1000, 15); // 1000 entries, 15s TTL
+    let metrics = api::metrics::EngineMetrics::new();
+    tracing::info!("Query cache: 1000 entries, 15s TTL");
+
+    let state = Arc::new(engine::AppState { config, cache, metrics });
 
     // Routes — layers applied bottom-up: last added = outermost
     let app = Router::new()
@@ -79,6 +84,7 @@ async fn main() {
         .route("/v1/explain", post(api::explain::handle_explain))
         .route("/v1/investigate", post(api::investigate::handle_investigate))
         .route("/health", get(api::health::handle_health))
+        .route("/metrics", get(api::metrics::handle_metrics))
         .layer(DefaultBodyLimit::max(256 * 1024)) // 256KB body limit
         .layer(cors)
         .layer(TraceLayer::new_for_http())
