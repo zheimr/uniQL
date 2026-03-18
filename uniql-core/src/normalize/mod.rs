@@ -39,7 +39,7 @@ pub struct NormalizedAggregation {
 }
 
 /// Pre-computed HAVING expression, using the actual aggregate function name.
-/// Fixes the LogsQL bug that hardcoded "count(*)".
+/// Supports compound expressions (AND/OR) via `parts` for multi-condition HAVING.
 #[derive(Debug, Clone)]
 pub struct NormalizedHaving {
     /// The actual aggregate function used (e.g., "count", "rate", "avg")
@@ -50,6 +50,9 @@ pub struct NormalizedHaving {
     pub value: String,
     /// Full expression for backends that need it (e.g., LogsQL filter pipe)
     pub lhs: Option<String>,
+    /// For compound HAVING (AND/OR): the full expression as a string.
+    /// When set, transpilers should use this instead of op+value.
+    pub full_expr: Option<String>,
 }
 
 // ─── Duration Parsing ────────────────────────────────────────────────────────
@@ -145,11 +148,37 @@ pub fn normalize(bound: BoundQuery) -> Result<NormalizedQuery, String> {
 }
 
 /// Normalize a HAVING expression.
-/// Uses the actual aggregate function name instead of hardcoding "count(*)".
+/// Supports compound AND/OR expressions by serializing to `full_expr`.
 fn normalize_having(expr: &Expr, agg: Option<&NormalizedAggregation>) -> NormalizedHaving {
     let agg_func = agg.map(|a| a.func_name.clone());
 
     match expr {
+        // Compound HAVING: count > 10 AND sum > 100
+        Expr::BinaryOp { op: BinaryOp::And, left, right } => {
+            let left_str = having_expr_to_string(left, agg.map(|a| a.func_name.as_str()));
+            let right_str = having_expr_to_string(right, agg.map(|a| a.func_name.as_str()));
+            let full = format!("{} AND {}", left_str, right_str);
+            NormalizedHaving {
+                aggregate_func: agg_func,
+                op: "AND".to_string(),
+                value: String::new(),
+                lhs: None,
+                full_expr: Some(full),
+            }
+        }
+        Expr::BinaryOp { op: BinaryOp::Or, left, right } => {
+            let left_str = having_expr_to_string(left, agg.map(|a| a.func_name.as_str()));
+            let right_str = having_expr_to_string(right, agg.map(|a| a.func_name.as_str()));
+            let full = format!("{} OR {}", left_str, right_str);
+            NormalizedHaving {
+                aggregate_func: agg_func,
+                op: "OR".to_string(),
+                value: String::new(),
+                lhs: None,
+                full_expr: Some(full),
+            }
+        }
+        // Simple HAVING: count > 10
         Expr::BinaryOp { left, op, right } => {
             let op_str = match op {
                 BinaryOp::Gt => ">",
@@ -168,7 +197,7 @@ fn normalize_having(expr: &Expr, agg: Option<&NormalizedAggregation>) -> Normali
 
             let is_agg_ref = matches!(left.as_ref(), Expr::Ident(n) if config::is_aggregate_function(n));
             let lhs = if is_agg_ref {
-                None // implicit: aggregate result is the LHS
+                None
             } else {
                 Some(having_value_to_string(left))
             };
@@ -176,10 +205,11 @@ fn normalize_having(expr: &Expr, agg: Option<&NormalizedAggregation>) -> Normali
             let value = having_value_to_string(right);
 
             NormalizedHaving {
-                aggregate_func: agg_func,
+                aggregate_func: agg_func.clone(),
                 op: op_str.to_string(),
-                value,
-                lhs,
+                value: value.clone(),
+                lhs: lhs.clone(),
+                full_expr: None,
             }
         }
         _ => NormalizedHaving {
@@ -187,7 +217,35 @@ fn normalize_having(expr: &Expr, agg: Option<&NormalizedAggregation>) -> Normali
             op: String::new(),
             value: String::new(),
             lhs: None,
+            full_expr: None,
         },
+    }
+}
+
+/// Serialize a HAVING sub-expression to string for compound expressions.
+fn having_expr_to_string(expr: &Expr, agg_func: Option<&str>) -> String {
+    match expr {
+        Expr::BinaryOp { op: BinaryOp::And, left, right } => {
+            format!("{} AND {}", having_expr_to_string(left, agg_func), having_expr_to_string(right, agg_func))
+        }
+        Expr::BinaryOp { op: BinaryOp::Or, left, right } => {
+            format!("({} OR {})", having_expr_to_string(left, agg_func), having_expr_to_string(right, agg_func))
+        }
+        Expr::BinaryOp { left, op, right } => {
+            let op_str = match op {
+                BinaryOp::Gt => ">",
+                BinaryOp::Lt => "<",
+                BinaryOp::Gte => ">=",
+                BinaryOp::Lte => "<=",
+                BinaryOp::Eq => "==",
+                BinaryOp::Neq => "!=",
+                _ => "?",
+            };
+            let lhs = having_value_to_string(left);
+            let rhs = having_value_to_string(right);
+            format!("{} {} {}", lhs, op_str, rhs)
+        }
+        _ => having_value_to_string(expr),
     }
 }
 
@@ -361,6 +419,40 @@ mod tests {
         assert!(nq.aggregation.is_none());
         assert!(nq.having.is_none());
         assert!(nq.group_by_labels.is_empty());
+    }
+
+    #[test]
+    fn test_normalize_having_compound_and() {
+        let nq = prepare_and_normalize(
+            "FROM logs WHERE service = \"api\" COMPUTE count() GROUP BY level HAVING count > 10 AND count < 1000"
+        );
+        let having = nq.having.unwrap();
+        assert!(having.full_expr.is_some(), "Compound HAVING should have full_expr");
+        let full = having.full_expr.unwrap();
+        assert!(full.contains("AND"), "Should contain AND: {}", full);
+        assert!(full.contains("> 10") || full.contains(">"), "Should contain threshold: {}", full);
+    }
+
+    #[test]
+    fn test_normalize_having_compound_or() {
+        let nq = prepare_and_normalize(
+            "FROM logs WHERE service = \"api\" COMPUTE count() GROUP BY level HAVING count > 100 OR count < 5"
+        );
+        let having = nq.having.unwrap();
+        assert!(having.full_expr.is_some());
+        let full = having.full_expr.unwrap();
+        assert!(full.contains("OR"), "Should contain OR: {}", full);
+    }
+
+    #[test]
+    fn test_normalize_having_simple_no_full_expr() {
+        let nq = prepare_and_normalize(
+            "FROM logs WHERE service = \"api\" COMPUTE count() GROUP BY level HAVING count > 100"
+        );
+        let having = nq.having.unwrap();
+        assert!(having.full_expr.is_none(), "Simple HAVING should not have full_expr");
+        assert_eq!(having.op, ">");
+        assert_eq!(having.value, "100");
     }
 
     #[test]

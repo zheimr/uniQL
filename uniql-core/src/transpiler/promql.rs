@@ -708,7 +708,9 @@ fn transpile_from_normalized(nq: &NormalizedQuery) -> Result<String, TranspileEr
 
     // Use normalized HAVING
     if let Some(ref having) = nq.having {
-        let having_str = if let Some(ref lhs) = having.lhs {
+        let having_str = if let Some(ref full) = having.full_expr {
+            full.clone()
+        } else if let Some(ref lhs) = having.lhs {
             format!("{} {} {}", lhs, having.op, having.value)
         } else {
             format!("{} {}", having.op, having.value)

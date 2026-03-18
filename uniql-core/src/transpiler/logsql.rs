@@ -626,8 +626,11 @@ fn transpile_from_normalized(nq: &NormalizedQuery) -> Result<String, TranspileEr
 
     // HAVING → filter pipe (uses normalized HAVING — fixes hardcoded "count(*)" bug)
     if let Some(ref having) = nq.having {
-        if !having.op.is_empty() {
-            // Use actual aggregate function from normalizer instead of hardcoded "count(*)"
+        if let Some(ref full) = having.full_expr {
+            // Compound HAVING (AND/OR) — use full expression
+            builder.pipe_stages.push(format!("filter {}", full));
+        } else if !having.op.is_empty() {
+            // Simple HAVING — use aggregate function ref
             let stats_ref = having.aggregate_func.as_deref()
                 .map(|f| match f {
                     "count" | "count_over_time" => "count()".to_string(),

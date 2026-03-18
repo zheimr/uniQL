@@ -8,6 +8,11 @@ use crate::normalize_result::NormalizedResult;
 use crate::planner::CorrelationPlan;
 use serde_json::Value;
 
+/// Maximum number of correlated events to prevent memory explosion.
+/// 100K metrics × 100K logs with high cardinality join keys could produce
+/// billions of rows without this guard.
+const MAX_CORRELATED_EVENTS: usize = 10_000;
+
 #[derive(Debug)]
 pub struct CorrelatedResult {
     pub events: Vec<CorrelatedEvent>,
@@ -106,6 +111,13 @@ pub fn correlate(
                 join_fields,
                 signals,
             });
+
+            if correlated_events.len() >= MAX_CORRELATED_EVENTS {
+                break;
+            }
+        }
+        if correlated_events.len() >= MAX_CORRELATED_EVENTS {
+            break;
         }
     }
 
@@ -588,6 +600,31 @@ mod tests {
     }
 
     #[test]
+    fn correlate_normalized_cardinality_limit() {
+        // Create enough entries to exceed MAX_CORRELATED_EVENTS
+        // 200 metrics × 200 logs with same host = 40,000 potential matches
+        // Should be capped at MAX_CORRELATED_EVENTS (10,000)
+        let metrics_rows: Vec<NormalizedRow> = (0..200)
+            .map(|i| make_normalized_row(Some(1000.0 + i as f64), vec![("host", "a")], Some("val")))
+            .collect();
+        let logs_rows: Vec<NormalizedRow> = (0..200)
+            .map(|i| make_normalized_row(Some(1000.0 + i as f64), vec![("host", "a")], Some("log")))
+            .collect();
+
+        let metrics = make_normalized_result("metrics", metrics_rows);
+        let logs = make_normalized_result("logs", logs_rows);
+
+        // Very wide time window ensures all match
+        let plan = make_correlation_plan(vec!["host"], Some("999999s"));
+        let result = correlate_normalized(
+            &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
+            &plan,
+        );
+        assert!(result.events.len() <= super::MAX_CORRELATED_EVENTS,
+            "Should be capped at {}, got {}", super::MAX_CORRELATED_EVENTS, result.events.len());
+    }
+
+    #[test]
     fn correlate_normalized_unknown_signal_treated_as_logs() {
         let metrics = make_normalized_result("metrics", vec![
             make_normalized_row(Some(1000.0), vec![("host", "a")], None),
@@ -713,6 +750,13 @@ pub fn correlate_normalized(
                 join_fields,
                 signals,
             });
+
+            if correlated_events.len() >= MAX_CORRELATED_EVENTS {
+                break;
+            }
+        }
+        if correlated_events.len() >= MAX_CORRELATED_EVENTS {
+            break;
         }
     }
 

@@ -66,6 +66,7 @@ async fn main() {
         .layer(middleware::from_fn_with_state(state.clone(), middleware_layers::api_key_auth))
         .layer(middleware::from_fn(middleware_layers::query_audit_log))
         .layer(middleware::from_fn(middleware_layers::request_id))
+        .layer(middleware::from_fn(middleware_layers::panic_recovery))
         .with_state(state);
 
     // Start with graceful shutdown
