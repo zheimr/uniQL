@@ -513,7 +513,7 @@ fn transpile_from_normalized(nq: &NormalizedQuery) -> Result<String, TranspileEr
                     }
                 }
             }
-            BoundCondition::MetricName(_) | BoundCondition::InList { .. } => {
+            BoundCondition::MetricName(_) | BoundCondition::InList { .. } | BoundCondition::CrossFieldOr { .. } => {
                 // Not applicable to LogsQL
             }
             BoundCondition::Native { backend, query } => {

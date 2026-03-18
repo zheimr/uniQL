@@ -54,6 +54,7 @@ struct PromQLBuilder {
     aggregation: Option<AggregationInfo>,
     group_by_labels: Vec<String>,
     having_expr: Option<String>,
+    or_expression: Option<String>,
 }
 
 struct LabelMatcher {
@@ -77,10 +78,16 @@ impl PromQLBuilder {
             aggregation: None,
             group_by_labels: Vec::new(),
             having_expr: None,
+            or_expression: None,
         }
     }
 
     fn build(&self) -> Result<String, TranspileError> {
+        // If we have a cross-field OR expression, return it directly
+        if let Some(ref or_expr) = self.or_expression {
+            return Ok(or_expr.clone());
+        }
+
         // If there are native fragments and nothing else, return native directly
         if !self.native_fragments.is_empty() && self.label_matchers.is_empty()
             && self.metric_name.is_none() && self.aggregation.is_none()
@@ -677,7 +684,6 @@ fn transpile_from_normalized(nq: &NormalizedQuery) -> Result<String, TranspileEr
             BoundCondition::Native { backend, query } => {
                 match backend.as_deref() {
                     None | Some("promql") | Some("metricsql") | Some("prometheus") => {
-                        // Native fragment injected directly as a raw label matcher
                         builder.native_fragments.push(query.clone());
                     }
                     Some(other) => {
@@ -685,6 +691,34 @@ fn transpile_from_normalized(nq: &NormalizedQuery) -> Result<String, TranspileEr
                             format!("NATIVE('{}', ...) cannot be transpiled to PromQL", other),
                         ));
                     }
+                }
+            }
+            BoundCondition::CrossFieldOr { branches } => {
+                // Build each branch as a separate selector and join with ` or `
+                let metric = builder.metric_name.as_deref().unwrap_or("");
+                let mut branch_selectors: Vec<String> = Vec::new();
+                for branch in branches {
+                    let mut matchers: Vec<String> = Vec::new();
+                    for cond in branch {
+                        match cond {
+                            BoundCondition::StreamLabel { name, op, value }
+                            | BoundCondition::FieldFilter { name, op, value } => {
+                                matchers.push(format!("{}{}\"{}\"", name, op.as_promql_str(), value));
+                            }
+                            BoundCondition::MetricName(name) => {
+                                matchers.push(format!("__name__=\"{}\"", name));
+                            }
+                            _ => {}
+                        }
+                    }
+                    if matchers.is_empty() {
+                        branch_selectors.push(metric.to_string());
+                    } else {
+                        branch_selectors.push(format!("{}{{{}}}", metric, matchers.join(", ")));
+                    }
+                }
+                if branch_selectors.len() > 1 {
+                    builder.or_expression = Some(branch_selectors.join(" or "));
                 }
             }
         }
@@ -1051,6 +1085,26 @@ mod tests {
     }
 
     // ─── Trait Coverage ──────────────────────────────────────────────
+
+    #[test]
+    fn test_cross_field_or_produces_binary_or() {
+        let result = transpile_normalized_query(
+            "FROM metrics WHERE __name__ = \"up\" AND job = \"api\" OR __name__ = \"up\" AND env = \"prod\""
+        ).unwrap();
+        assert!(result.contains(" or "), "Should contain PromQL 'or' operator. Got: {}", result);
+        assert!(result.contains("job"), "Should contain job matcher. Got: {}", result);
+        assert!(result.contains("env"), "Should contain env matcher. Got: {}", result);
+    }
+
+    #[test]
+    fn test_same_field_or_produces_regex() {
+        let result = transpile_normalized_query(
+            "FROM metrics WHERE __name__ = \"up\" AND (job = \"api\" OR job = \"web\")"
+        ).unwrap();
+        assert!(result.contains("=~"), "Same-field OR should use regex. Got: {}", result);
+        assert!(result.contains("api|web") || result.contains("api") && result.contains("web"),
+            "Should contain both values. Got: {}", result);
+    }
 
     #[test]
     fn test_trait_name() {

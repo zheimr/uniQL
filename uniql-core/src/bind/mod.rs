@@ -59,6 +59,11 @@ pub enum BoundCondition {
         backend: Option<String>,
         query: String,
     },
+    /// Cross-field OR: each branch is a separate set of conditions.
+    /// Transpilers should generate union expressions (e.g., PromQL `or`, LogQL `or`).
+    CrossFieldOr {
+        branches: Vec<Vec<BoundCondition>>,
+    },
 }
 
 /// A flattened OR group: `service = "a" OR service = "b"` → one condition.
@@ -209,12 +214,18 @@ fn extract_bound_conditions(
         }
 
         Expr::BinaryOp { left: _, op: BinaryOp::Or, right: _ } => {
-            // Try to flatten OR on same field
+            // Try to flatten OR on same field: service = "a" OR service = "b" → regex
             if let Some(or_group) = collect_or_values(expr) {
                 out.push(BoundCondition::OrGroup(or_group));
             } else {
-                // OR on different fields — extract both sides
-                extract_or_branches(expr, signal_type, out)?;
+                // Cross-field OR: collect each branch separately
+                let mut branches: Vec<Vec<BoundCondition>> = Vec::new();
+                collect_or_branches(expr, signal_type, &mut branches)?;
+                if branches.len() > 1 {
+                    out.push(BoundCondition::CrossFieldOr { branches });
+                } else if let Some(branch) = branches.into_iter().next() {
+                    out.extend(branch);
+                }
             }
         }
 
@@ -303,18 +314,21 @@ fn extract_bound_conditions(
     Ok(())
 }
 
-fn extract_or_branches(
+/// Collect OR branches into separate condition sets for cross-field OR.
+fn collect_or_branches(
     expr: &Expr,
     signal_type: &SignalType,
-    out: &mut Vec<BoundCondition>,
+    branches: &mut Vec<Vec<BoundCondition>>,
 ) -> Result<(), String> {
     match expr {
         Expr::BinaryOp { left, op: BinaryOp::Or, right } => {
-            extract_or_branches(left, signal_type, out)?;
-            extract_or_branches(right, signal_type, out)?;
+            collect_or_branches(left, signal_type, branches)?;
+            collect_or_branches(right, signal_type, branches)?;
         }
         _ => {
-            extract_bound_conditions(expr, signal_type, out)?;
+            let mut branch = Vec::new();
+            extract_bound_conditions(expr, signal_type, &mut branch)?;
+            branches.push(branch);
         }
     }
     Ok(())
@@ -490,15 +504,18 @@ mod tests {
 
     #[test]
     fn test_bind_cross_field_or() {
-        // OR on different fields should NOT flatten into OrGroup
+        // OR on different fields should produce CrossFieldOr, not OrGroup
         let ast = crate::prepare(
             "FROM logs WHERE service = \"api\" OR host = \"prod-01\""
         ).unwrap();
         let bound = bind(&ast).unwrap();
         let or_group = bound.conditions.iter().find(|c| matches!(c, BoundCondition::OrGroup(_)));
         assert!(or_group.is_none(), "Cross-field OR should not create OrGroup");
-        // Should produce individual conditions instead
-        assert!(bound.conditions.len() >= 2);
+        let cross_or = bound.conditions.iter().find(|c| matches!(c, BoundCondition::CrossFieldOr { .. }));
+        assert!(cross_or.is_some(), "Cross-field OR should create CrossFieldOr");
+        if let Some(BoundCondition::CrossFieldOr { branches }) = cross_or {
+            assert_eq!(branches.len(), 2, "Should have 2 branches");
+        }
     }
 
     #[test]
