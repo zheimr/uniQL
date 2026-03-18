@@ -1,0 +1,14 @@
+# UNIQL Engine Configuration
+# Set UNIQL_CONFIG=/path/to/this/file to use
+
+listen = "0.0.0.0:9090"
+
+[[backends]]
+name = "victoria"
+type = "prometheus"
+url = "http://victoria-metrics:8428"
+
+[[backends]]
+name = "vlogs"
+type = "victorialogs"
+url = "http://victoria-logs:9428"

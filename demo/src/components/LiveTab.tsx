@@ -1,0 +1,613 @@
+import { useState, useEffect, useCallback, useRef } from 'react';
+
+const ENGINE_URL = `http://${window.location.hostname}:9090`;
+const REFRESH_INTERVAL = 10_000;
+
+// --- Types ---
+
+interface MetricResult {
+  metric: Record<string, string>;
+  value: [number, string];
+}
+
+interface QueryResponse {
+  status: string;
+  data?: {
+    data?: {
+      result?: MetricResult[];
+    };
+    // VLogs raw format
+    result?: Array<{ _msg?: string; _time?: string; [key: string]: unknown }>;
+    // SHOW table format
+    format?: string;
+    columns?: string[];
+    rows?: unknown[][];
+  };
+  metadata?: {
+    parse_time_us?: number;
+    transpile_time_us?: number;
+    execute_time_ms?: number;
+    total_time_ms?: number;
+    native_query?: string;
+  };
+}
+
+interface WidgetConfig {
+  id: string;
+  title: string;
+  uniql: string;
+  unit: string;
+  icon: string;
+  color: string;
+  extract: (results: MetricResult[]) => { display: string; numeric: number };
+  description: string;
+}
+
+interface WidgetState {
+  display: string;
+  numeric: number;
+  native?: string;
+  totalMs?: number;
+  executeMs?: number;
+  parseUs?: number;
+  transpileUs?: number;
+  history: number[];
+  loading: boolean;
+  error?: string;
+}
+
+interface HealthData {
+  status: string;
+  version: string;
+  backends: { name: string; type: string; url: string; status: string }[];
+}
+
+interface LogEntry {
+  _msg?: string;
+  _time?: string;
+  [key: string]: unknown;
+}
+
+// --- Widget definitions ---
+
+const WIDGETS: WidgetConfig[] = [
+  {
+    id: 'snmp',
+    title: 'SNMP Devices',
+    uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "count(snmpv2_device_up==1)"',
+    unit: 'online',
+    icon: 'N',
+    color: '#39d0d8',
+    description: 'Network devices reporting via SNMP v2 — count(snmpv2_device_up==1)',
+    extract: (results) => {
+      if (!results.length) return { display: '0', numeric: 0 };
+      const val = parseInt(results[0]?.value?.[1] || '0');
+      return { display: `${val}`, numeric: val };
+    },
+  },
+  {
+    id: 'vms',
+    title: 'vSphere VMs',
+    uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "count(count by (vmname)(vsphere_vm_cpu_usage_average))"',
+    unit: 'active',
+    icon: 'V',
+    color: '#7c5cfc',
+    description: 'Virtual machines with CPU telemetry — count by vmname',
+    extract: (results) => {
+      if (!results.length) return { display: '0', numeric: 0 };
+      const val = parseInt(results[0]?.value?.[1] || '0');
+      return { display: `${val}`, numeric: val };
+    },
+  },
+  {
+    id: 'esxi',
+    title: 'ESXi Host CPU',
+    uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "avg(vsphere_host_cpu_usage_average)"',
+    unit: '%',
+    icon: 'H',
+    color: '#d29922',
+    description: 'Average CPU utilization across all ESXi hosts',
+    extract: (results) => {
+      if (!results.length) return { display: '--', numeric: 0 };
+      const val = parseFloat(results[0]?.value?.[1] || '0');
+      return { display: val.toFixed(1), numeric: val };
+    },
+  },
+  {
+    id: 'services',
+    title: 'Services Up',
+    uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "up"',
+    unit: '',
+    icon: 'S',
+    color: '#3fb950',
+    description: 'Platform service health via up metric',
+    extract: (results) => {
+      if (!results.length) return { display: '0/0', numeric: 0 };
+      const up = results.filter((r) => r.value?.[1] === '1').length;
+      const total = results.length;
+      return { display: `${up}/${total}`, numeric: up };
+    },
+  },
+];
+
+// --- Component ---
+
+const TIME_RANGES = [
+  { label: '5m', value: '5m' },
+  { label: '15m', value: '15m' },
+  { label: '1h', value: '1h' },
+  { label: '6h', value: '6h' },
+  { label: '24h', value: '24h' },
+];
+
+export default function LiveTab() {
+  const [widgetStates, setWidgetStates] = useState<Record<string, WidgetState>>({});
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [countdown, setCountdown] = useState(REFRESH_INTERVAL / 1000);
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [health, setHealth] = useState<HealthData | null>(null);
+  const [engineLatency, setEngineLatency] = useState<number | null>(null);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [timeRange, setTimeRange] = useState('5m');
+  const [logState, setLogState] = useState<{
+    native?: string;
+    ms?: number;
+    error?: string;
+    fallback: boolean;
+  }>({ fallback: false });
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const refreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // --- Fetch health ---
+  const fetchHealth = useCallback(async () => {
+    try {
+      const start = performance.now();
+      const resp = await fetch(`${ENGINE_URL}/health`);
+      const elapsed = performance.now() - start;
+      const data: HealthData = await resp.json();
+      setHealth(data);
+      setEngineLatency(Math.round(elapsed));
+    } catch {
+      setHealth(null);
+      setEngineLatency(null);
+    }
+  }, []);
+
+  // --- Fetch a single widget ---
+  const fetchWidget = useCallback(async (widget: WidgetConfig) => {
+    try {
+      const resp = await fetch(`${ENGINE_URL}/v1/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: widget.uniql }),
+      });
+      const json: QueryResponse = await resp.json();
+      const results: MetricResult[] = json.data?.data?.result ?? [];
+      const { display, numeric } = widget.extract(results);
+
+      setWidgetStates((prev) => {
+        const prevHistory = prev[widget.id]?.history ?? [];
+        const newHistory = [...prevHistory.slice(-29), numeric];
+        return {
+          ...prev,
+          [widget.id]: {
+            display,
+            numeric,
+            native: json.metadata?.native_query,
+            totalMs: json.metadata?.total_time_ms,
+            executeMs: json.metadata?.execute_time_ms,
+            parseUs: json.metadata?.parse_time_us,
+            transpileUs: json.metadata?.transpile_time_us,
+            history: newHistory,
+            loading: false,
+          },
+        };
+      });
+    } catch (err) {
+      setWidgetStates((prev) => ({
+        ...prev,
+        [widget.id]: {
+          display: '--',
+          numeric: 0,
+          history: prev[widget.id]?.history ?? [],
+          loading: false,
+          error: err instanceof Error ? err.message : 'Fetch failed',
+        },
+      }));
+    }
+  }, []);
+
+  // --- Fetch logs ---
+  const fetchLogs = useCallback(async () => {
+    try {
+      const resp = await fetch(`${ENGINE_URL}/v1/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: `SHOW table FROM vlogs WHERE job = "fortigate" WITHIN last ${timeRange}` }),
+      });
+      const json: QueryResponse = await resp.json();
+
+      // SHOW table format returns { columns, rows, format: "table" }
+      // Raw vlogs returns { result: [...], result_type: "logs" }
+      let entries: LogEntry[] = [];
+
+      if (json.status === 'success' && json.data) {
+        if (json.data.format === 'table' && json.data.columns && json.data.rows) {
+          // Table format → reconstruct objects from columns + rows
+          const cols = json.data.columns;
+          entries = json.data.rows.slice(0, 20).map((row) => {
+            const obj: LogEntry = {};
+            cols.forEach((col, i) => {
+              obj[col] = (row as unknown[])[i] as string;
+            });
+            return obj;
+          });
+        } else if (json.data.result && json.data.result.length > 0) {
+          entries = json.data.result.slice(0, 20);
+        }
+      }
+
+      if (entries.length > 0) {
+        setLogs(entries);
+        setLogState({
+          native: json.metadata?.native_query,
+          ms: json.metadata?.total_time_ms,
+          fallback: false,
+        });
+      } else {
+        setLogs([]);
+        setLogState({
+          native: json.metadata?.native_query,
+          ms: json.metadata?.total_time_ms,
+          fallback: true,
+        });
+      }
+    } catch {
+      setLogs([]);
+      setLogState({ fallback: true, error: 'Engine unreachable' });
+    }
+  }, [timeRange]);
+
+  // --- Fetch all ---
+  const fetchAll = useCallback(async () => {
+    setWidgetStates((prev) => {
+      const next = { ...prev };
+      for (const w of WIDGETS) {
+        next[w.id] = { ...(next[w.id] ?? { display: '--', numeric: 0, history: [] }), loading: true };
+      }
+      return next;
+    });
+
+    await Promise.all([
+      fetchHealth(),
+      ...WIDGETS.map((w) => fetchWidget(w)),
+      fetchLogs(),
+    ]);
+
+    setLastRefresh(new Date());
+    setCountdown(REFRESH_INTERVAL / 1000);
+  }, [fetchHealth, fetchWidget, fetchLogs]);
+
+  // --- Timers ---
+  useEffect(() => {
+    fetchAll();
+    refreshRef.current = setInterval(fetchAll, REFRESH_INTERVAL);
+    return () => {
+      if (refreshRef.current) clearInterval(refreshRef.current);
+    };
+  }, [fetchAll]);
+
+  useEffect(() => {
+    countdownRef.current = setInterval(() => {
+      setCountdown((prev) => (prev <= 1 ? REFRESH_INTERVAL / 1000 : prev - 1));
+    }, 1000);
+    return () => {
+      if (countdownRef.current) clearInterval(countdownRef.current);
+    };
+  }, []);
+
+  // --- Derived stats for hero banner ---
+  const snmpCount = widgetStates.snmp?.display ?? '--';
+  const vmCount = widgetStates.vms?.display ?? '--';
+  const serviceCount = widgetStates.services?.display ?? '--';
+  const avgLatency = (() => {
+    const times = WIDGETS.map((w) => widgetStates[w.id]?.totalMs).filter(
+      (t): t is number => t != null
+    );
+    if (!times.length) return null;
+    return Math.round(times.reduce((a, b) => a + b, 0) / times.length);
+  })();
+
+  return (
+    <div className="space-y-4 pt-4 animate-fade-in">
+      {/* Title bar */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-semibold text-[var(--color-green)] uppercase tracking-wider">
+            AETHERIS Live
+          </span>
+          <span className="relative flex items-center justify-center w-2.5 h-2.5">
+            <span className="absolute w-full h-full rounded-full bg-[var(--color-green)]" style={{ animation: 'pulse-ring 2s ease-out infinite' }} />
+            <span className="w-2 h-2 rounded-full bg-[var(--color-green)]" />
+          </span>
+        </div>
+        <div className="flex items-center gap-4 text-[10px] text-[var(--color-text-dim)] font-mono">
+          <span className="flex items-center gap-1.5">
+            <span>Next refresh:</span>
+            <span className="text-[var(--color-accent)] tabular-nums min-w-[1.5ch] text-right">{countdown}s</span>
+          </span>
+          {lastRefresh && <span>{lastRefresh.toLocaleTimeString('tr-TR')}</span>}
+        </div>
+      </div>
+
+      {/* Platform Stats Hero Banner */}
+      <div className="rounded-lg border border-[var(--color-border)] bg-gradient-to-r from-[var(--color-surface-2)] to-[var(--color-surface-3)] p-4">
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-[10px] font-semibold text-[var(--color-text-dim)] uppercase tracking-wider">
+            Platform Overview
+          </span>
+          {health && (
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-semibold bg-[var(--color-green-dim)] text-[var(--color-green)]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-green)]" />
+              Engine v{health.version}
+            </span>
+          )}
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <HeroStat value={snmpCount} label="SNMP Devices" color="#39d0d8" icon="N" />
+          <HeroStat value={vmCount} label="Virtual Machines" color="#7c5cfc" icon="V" />
+          <HeroStat value={serviceCount} label="Services" color="#3fb950" icon="S" />
+          <HeroStat value={avgLatency != null ? `${avgLatency}` : '--'} label="Avg Engine Latency" color="#d29922" icon="~" unit="ms" />
+        </div>
+      </div>
+
+      {/* Metric widget cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {WIDGETS.map((w) => {
+          const s = widgetStates[w.id];
+          const isExpanded = expanded === w.id;
+          return (
+            <div
+              key={w.id}
+              className={`rounded-lg border bg-[var(--color-surface-2)] p-4 cursor-pointer transition-all ${
+                isExpanded
+                  ? 'border-[var(--color-accent)]/40 ring-1 ring-[var(--color-accent)]/20'
+                  : 'border-[var(--color-border)] hover:border-[var(--color-border-bright)]'
+              }`}
+              onClick={() => setExpanded(isExpanded ? null : w.id)}
+            >
+              {/* Header row */}
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <span
+                    className="w-5 h-5 rounded flex items-center justify-center text-[9px] font-bold"
+                    style={{
+                      background: `${w.color}18`,
+                      color: w.color,
+                      border: `1px solid ${w.color}40`,
+                    }}
+                  >
+                    {w.icon}
+                  </span>
+                  <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wider">
+                    {w.title}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {s?.loading && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-amber)] animate-pulse" />
+                  )}
+                  {s?.totalMs != null && (
+                    <span className="text-[9px] text-[var(--color-text-dim)] font-mono">{s.totalMs}ms</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Value */}
+              <div className="flex items-baseline gap-1.5">
+                <span
+                  className="text-2xl font-bold font-mono"
+                  style={{ color: s?.error ? 'var(--color-red)' : 'var(--color-text-bright)' }}
+                >
+                  {s?.display ?? '--'}
+                </span>
+                {w.unit && <span className="text-xs text-[var(--color-text-dim)]">{w.unit}</span>}
+              </div>
+
+              {/* Sparkline */}
+              {s?.history && s.history.length > 1 && <Spark data={s.history} color={w.color} />}
+
+              {/* Expanded query details */}
+              {isExpanded && s && (
+                <div className="mt-3 pt-3 border-t border-[var(--color-border)] space-y-2 text-[10px]">
+                  <div className="text-[var(--color-text-dim)] mb-1">{w.description}</div>
+                  <div>
+                    <span className="text-[var(--color-text-dim)]">UNIQL: </span>
+                    <span className="text-[var(--color-accent)] font-mono break-all">{w.uniql}</span>
+                  </div>
+                  {s.native && (
+                    <div>
+                      <span className="text-[var(--color-text-dim)]">Native: </span>
+                      <span className="text-[var(--color-cyan)] font-mono break-all">{s.native}</span>
+                    </div>
+                  )}
+                  <div className="flex gap-3 text-[var(--color-text-dim)] font-mono">
+                    {s.parseUs != null && <span>parse: {s.parseUs}us</span>}
+                    {s.transpileUs != null && <span>transpile: {s.transpileUs}us</span>}
+                    {s.executeMs != null && <span>execute: {s.executeMs}ms</span>}
+                    {s.totalMs != null && <span className="text-[var(--color-green)]">total: {s.totalMs}ms</span>}
+                  </div>
+                  {s.error && <div className="text-[var(--color-red)] font-mono">{s.error}</div>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Log stream */}
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-3)]">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-[var(--color-amber)] tracking-wider">LOG STREAM</span>
+            {!logState.fallback && (
+              <span className="text-[10px] text-[var(--color-green)] font-mono">LIVE ({logs.length})</span>
+            )}
+          </div>
+          <div className="flex items-center gap-3 text-[10px] text-[var(--color-text-dim)] font-mono">
+            <div className="flex items-center gap-1">
+              {TIME_RANGES.map((t) => (
+                <button
+                  key={t.value}
+                  onClick={() => setTimeRange(t.value)}
+                  className={`px-1.5 py-0.5 rounded text-[9px] cursor-pointer transition-all ${
+                    timeRange === t.value
+                      ? 'bg-[var(--color-amber-dim)] text-[var(--color-amber)] border border-[var(--color-amber)]/30'
+                      : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-transparent'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            {logState.ms != null && <span>{logState.ms}ms</span>}
+            {logState.native && (
+              <span className="text-[var(--color-cyan)] max-w-[300px] truncate">{logState.native}</span>
+            )}
+          </div>
+        </div>
+        <div className="max-h-72 overflow-y-auto divide-y divide-[var(--color-border)]/50">
+          {logState.fallback ? (
+            <div className="p-6 text-center">
+              <div className="text-[var(--color-text-dim)] text-xs font-semibold mb-1">No logs in selected range</div>
+              <div className="text-[var(--color-text-dim)] text-[11px]">
+                No FortiGate logs found in the last {timeRange}. Try a wider time range.
+              </div>
+              {logState.error && (
+                <div className="mt-2 text-[10px] text-[var(--color-red)]">{logState.error}</div>
+              )}
+            </div>
+          ) : logs.length === 0 ? (
+            <div className="p-4 text-center text-[var(--color-text-dim)] text-xs">Waiting for log data...</div>
+          ) : (
+            logs.map((entry, i) => {
+              const time = entry._time as string | undefined;
+              const action = entry.action as string | undefined;
+              const srcIp = entry.source_ip as string | undefined;
+              const level = entry.level as string | undefined;
+              const subtype = entry.subtype as string | undefined;
+              const msg = entry._msg as string | undefined;
+              // Show compact syslog view: time | level | action | source_ip | truncated msg
+              const msgPreview = msg && msg.length > 200 ? msg.slice(0, 200) + '...' : msg;
+              return (
+                <div key={i} className="px-4 py-1.5 hover:bg-[var(--color-surface-3)] transition-colors flex items-start gap-2">
+                  {time && (
+                    <span className="text-[10px] text-[var(--color-text-dim)] font-mono shrink-0 w-[52px] pt-0.5">
+                      {new Date(time).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </span>
+                  )}
+                  {action && (
+                    <span className={`text-[9px] font-mono px-1 py-0.5 rounded shrink-0 ${
+                      action === 'deny' ? 'bg-[var(--color-red)]/15 text-[var(--color-red)]'
+                        : action === 'accept' ? 'bg-[var(--color-green)]/15 text-[var(--color-green)]'
+                        : 'bg-[var(--color-surface-3)] text-[var(--color-text-dim)]'
+                    }`}>
+                      {action}
+                    </span>
+                  )}
+                  {subtype && (
+                    <span className="text-[9px] text-[var(--color-cyan)] font-mono shrink-0">{subtype}</span>
+                  )}
+                  {srcIp && (
+                    <span className="text-[9px] text-[var(--color-amber)] font-mono shrink-0">{srcIp}</span>
+                  )}
+                  <span className="text-[10px] text-[var(--color-text)] font-mono break-all leading-relaxed min-w-0">
+                    {msgPreview ?? (level || JSON.stringify(entry).slice(0, 150))}
+                  </span>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {/* Engine backends status row */}
+      {health && (
+        <div className="flex items-center gap-3 text-[10px] text-[var(--color-text-dim)] font-mono">
+          <span className="uppercase tracking-wider">Backends:</span>
+          {health.backends.map((b) => (
+            <span key={b.name} className="inline-flex items-center gap-1">
+              <span className={`w-1.5 h-1.5 rounded-full ${b.status === 'reachable' ? 'bg-[var(--color-green)]' : 'bg-[var(--color-red)]'}`} />
+              <span>{b.name}</span>
+              <span className="text-[var(--color-text-dim)]">({b.type})</span>
+            </span>
+          ))}
+          {engineLatency != null && (
+            <span className="ml-auto text-[var(--color-text-dim)]">Health RTT: {engineLatency}ms</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Hero stat component ---
+
+function HeroStat({ value, label, color, icon, unit }: { value: string; label: string; color: string; icon: string; unit?: string }) {
+  return (
+    <div className="flex items-center gap-3">
+      <div
+        className="w-9 h-9 rounded-lg flex items-center justify-center text-sm font-bold shrink-0"
+        style={{
+          background: `${color}18`,
+          color,
+          border: `1px solid ${color}40`,
+        }}
+      >
+        {icon}
+      </div>
+      <div>
+        <div className="flex items-baseline gap-1">
+          <span className="text-xl font-bold font-mono text-[var(--color-text-bright)]">{value}</span>
+          {unit && <span className="text-[10px] text-[var(--color-text-dim)]">{unit}</span>}
+        </div>
+        <div className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wider">{label}</div>
+      </div>
+    </div>
+  );
+}
+
+// --- Sparkline component ---
+
+function Spark({ data, color = 'var(--color-accent)' }: { data: number[]; color?: string }) {
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  const w = 90;
+  const h = 24;
+  const points = data
+    .map((v, i) => {
+      const x = (i / (data.length - 1)) * w;
+      const y = h - ((v - min) / range) * (h - 4) - 2;
+      return `${x},${y}`;
+    })
+    .join(' ');
+  const fillPoints = `0,${h} ${points} ${w},${h}`;
+  const gradId = `spark-grad-${color.replace(/[^a-z0-9]/gi, '')}`;
+
+  return (
+    <svg width={w} height={h} className="mt-2">
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.2" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <polygon points={fillPoints} fill={`url(#${gradId})`} />
+      <polyline points={points} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.8" />
+      {data.length > 0 && (
+        <circle cx={w} cy={h - ((data[data.length - 1] - min) / range) * (h - 4) - 2} r="2" fill={color} />
+      )}
+    </svg>
+  );
+}

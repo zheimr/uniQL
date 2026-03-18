@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "uniql-core",
+    "uniql-engine",
+    "uniql-wasm",
+]
+resolver = "2"

@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UNIQL Playground</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg: #0a0a0f;
+      --surface: #12121a;
+      --surface2: #1a1a25;
+      --border: #2a2a3a;
+      --text: #e0e0e8;
+      --text-dim: #888899;
+      --accent: #6c5ce7;
+      --accent-glow: rgba(108, 92, 231, 0.15);
+      --green: #2ecc71;
+      --red: #e74c3c;
+      --yellow: #f39c12;
+      --blue: #3498db;
+    }
+
+    body {
+      font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-mark {
+      width: 32px; height: 32px;
+      background: var(--accent);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      font-size: 14px;
+      color: white;
+    }
+
+    .logo h1 {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+
+    .logo h1 span { color: var(--accent); }
+
+    .logo-sub {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-left: 12px;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .backend-select {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .backend-select:focus { outline: 1px solid var(--accent); }
+
+    .btn {
+      padding: 8px 20px;
+      border-radius: 8px;
+      border: none;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+    }
+
+    .btn-primary:hover { filter: brightness(1.15); }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+    }
+
+    .btn-ghost:hover { color: var(--text); border-color: var(--text-dim); }
+
+    /* ── Main Layout ── */
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr auto;
+      gap: 0;
+      overflow: hidden;
+    }
+
+    .panel {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-dim);
+    }
+
+    .panel-header .tag {
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-weight: 500;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    .tag-valid { background: rgba(46, 204, 113, 0.15); color: var(--green); }
+    .tag-error { background: rgba(231, 76, 60, 0.15); color: var(--red); }
+    .tag-warn { background: rgba(243, 156, 18, 0.15); color: var(--yellow); }
+
+    .panel-body {
+      flex: 1;
+      overflow: auto;
+    }
+
+    .editor-panel { border-right: 1px solid var(--border); }
+
+    #editor { width: 100%; height: 100%; }
+
+    .output-content {
+      padding: 16px;
+      font-size: 13px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .output-native {
+      color: var(--green);
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .output-error {
+      color: var(--red);
+    }
+
+    .output-section {
+      margin-bottom: 16px;
+    }
+
+    .output-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-dim);
+      margin-bottom: 4px;
+    }
+
+    .output-ast {
+      font-size: 11px;
+      color: var(--text-dim);
+      max-height: 300px;
+      overflow: auto;
+      background: var(--surface2);
+      padding: 12px;
+      border-radius: 6px;
+    }
+
+    /* ── Bottom Bar ── */
+    .bottom-bar {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 16px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    .status-indicators {
+      display: flex;
+      gap: 16px;
+    }
+
+    .indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+
+    .dot-idle { background: var(--text-dim); }
+
+    /* ── Examples Drawer ── */
+    .examples-drawer {
+      display: none;
+      position: absolute;
+      top: 56px;
+      right: 24px;
+      width: 420px;
+      max-height: 70vh;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+      z-index: 100;
+      overflow: auto;
+    }
+
+    .examples-drawer.open { display: block; }
+
+    .example-item {
+      padding: 12px 16px;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      transition: background 0.1s;
+    }
+
+    .example-item:hover { background: var(--surface2); }
+
+    .example-title {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .example-code {
+      font-size: 11px;
+      color: var(--text-dim);
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">
+      <div class="logo-mark">U</div>
+      <h1><span>UNI</span>QL</h1>
+      <span class="logo-sub">Playground v0.1</span>
+    </div>
+    <div class="header-right">
+      <select id="backend" class="backend-select">
+        <option value="promql">PromQL (Prometheus/VM)</option>
+        <option value="logsql">LogsQL (VictoriaLogs)</option>
+        <option value="logql">LogQL (Loki)</option>
+      </select>
+      <button class="btn btn-ghost" id="examples-btn">Examples</button>
+      <button class="btn btn-primary" id="run-btn">Transpile</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="panel editor-panel">
+      <div class="panel-header">
+        <span>UNIQL Query</span>
+        <span id="validation-tag" class="tag tag-valid">Valid</span>
+      </div>
+      <div class="panel-body">
+        <div id="editor"></div>
+      </div>
+    </div>
+
+    <div class="panel output-panel">
+      <div class="panel-header">
+        <span>Output</span>
+        <span id="backend-label" class="tag" style="background:rgba(108,92,231,0.15);color:var(--accent);">PromQL</span>
+      </div>
+      <div class="panel-body">
+        <div id="output" class="output-content"></div>
+      </div>
+    </div>
+
+    <div class="bottom-bar">
+      <div class="status-indicators">
+        <div class="indicator"><div class="dot"></div><span>WASM Ready</span></div>
+        <div class="indicator" id="parse-time"><div class="dot dot-idle"></div><span>--</span></div>
+      </div>
+      <span>UNIQL v0.1.0 — Write once, query everything.</span>
+    </div>
+  </main>
+
+  <div id="examples-drawer" class="examples-drawer"></div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

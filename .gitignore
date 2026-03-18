@@ -1,0 +1,38 @@
+# Rust
+**/target/
+**/*.rs.bk
+Cargo.lock
+
+# Node
+demo/node_modules/
+demo/dist/
+playground/node_modules/
+playground/dist/
+
+# WASM build artifacts (keep source, ignore compiled output in public)
+demo/public/wasm/*.wasm
+demo/public/wasm/*.js
+demo/public/wasm/*.d.ts
+demo/public/wasm/package.json
+demo/public/wasm/.gitignore
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Env
+.env
+.env.local
+
+# Coverage profraw
+*.profraw
+target/coverage/
+
+# Chat logs
+chat.md

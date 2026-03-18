@@ -1,0 +1,25 @@
+services:
+  uniql-engine:
+    image: uniql/engine:latest
+    build: .
+    container_name: uniql-engine
+    ports:
+      - "9090:9090"
+    environment:
+      UNIQL_LISTEN: "0.0.0.0:9090"
+      UNIQL_BACKENDS: |
+        [
+          {"name": "victoria", "type": "prometheus", "url": "http://victoria-metrics:8428"},
+          {"name": "vlogs", "type": "victorialogs", "url": "http://victoria-logs:9428"}
+        ]
+      RUST_LOG: "info"
+    networks:
+      - aetheris_net-core
+      - aetheris_net-ingest
+    restart: unless-stopped
+
+networks:
+  aetheris_net-core:
+    external: true
+  aetheris_net-ingest:
+    external: true
