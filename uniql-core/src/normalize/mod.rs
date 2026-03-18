@@ -59,6 +59,9 @@ pub struct NormalizedHaving {
 
 /// Parse a duration string into seconds.
 /// Supports: ms, s, m, h, d
+/// Maximum allowed duration: 365 days (in seconds).
+const MAX_DURATION_SECS: f64 = 365.0 * 86400.0;
+
 pub fn parse_duration(raw: &str) -> Result<NormalizedDuration, String> {
     let raw = raw.trim();
     let err = || format!("Invalid duration: {}", raw);
@@ -76,6 +79,10 @@ pub fn parse_duration(raw: &str) -> Result<NormalizedDuration, String> {
     } else {
         return Err(format!("Invalid duration suffix: {}", raw));
     };
+
+    if seconds.is_infinite() || seconds.is_nan() || seconds > MAX_DURATION_SECS || seconds < 0.0 {
+        return Err(format!("Duration out of range (max 365d): {}", raw));
+    }
 
     Ok(NormalizedDuration {
         raw: raw.to_string(),
@@ -453,6 +460,27 @@ mod tests {
         assert!(having.full_expr.is_none(), "Simple HAVING should not have full_expr");
         assert_eq!(having.op, ">");
         assert_eq!(having.value, "100");
+    }
+
+    #[test]
+    fn test_parse_duration_overflow_rejected() {
+        assert!(parse_duration("999999999d").is_err());
+    }
+
+    #[test]
+    fn test_parse_duration_negative_rejected() {
+        assert!(parse_duration("-5m").is_err());
+    }
+
+    #[test]
+    fn test_parse_duration_365d_ok() {
+        let d = parse_duration("365d").unwrap();
+        assert!((d.seconds - 365.0 * 86400.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_parse_duration_366d_rejected() {
+        assert!(parse_duration("366d").is_err());
     }
 
     #[test]
