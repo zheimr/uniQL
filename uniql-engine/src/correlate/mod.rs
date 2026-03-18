@@ -85,10 +85,12 @@ pub fn correlate(
                 continue;
             }
 
-            // Check time window
+            // Check time window — require both timestamps for time-based matching.
+            // If either side has no timestamp, skip to prevent false positive correlations.
             let time_match = match (m.timestamp_epoch, l.timestamp_epoch) {
                 (Some(mt), Some(lt)) => (mt - lt).abs() <= total_window,
-                _ => true, // if no timestamps, match by field only
+                (None, None) => true, // both missing → field-only match (intentional)
+                _ => false, // one side missing → skip (prevents silent false positives)
             };
 
             if !time_match {
@@ -327,19 +329,18 @@ mod tests {
 
     #[test]
     fn correlate_basic_field_match() {
-        // Use matching timestamps close together
         let metrics = make_backend_result("prometheus", serde_json::json!({
             "data": {"result": [
                 {"metric": {"host": "srv-01"}, "value": [1000.0, "42"]}
             ]}
         }));
+        // Include _time so both sides have timestamps — within 60s of epoch 1000
         let logs = make_backend_result("victorialogs", serde_json::json!({
             "result": [
-                {"host": "srv-01", "_msg": "error"}
+                {"host": "srv-01", "_msg": "error", "_time": "1970-01-01T00:16:50Z"}
             ]
         }));
 
-        // Use large time window so timestamps don't matter (log has no _time so epoch=None → always matches)
         let plan = make_correlation_plan(vec!["host"], Some("60s"));
         let result = correlate(
             &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
@@ -347,7 +348,7 @@ mod tests {
         );
 
         assert_eq!(result.metadata.strategy, "TimeFieldJoin");
-        assert!(result.events.len() > 0, "Should correlate on matching host (no timestamp = field-only match)");
+        assert!(result.events.len() > 0, "Should correlate on matching host + time window");
         assert_eq!(result.events[0].join_fields.get("host").unwrap(), "srv-01");
         assert!(result.events[0].signals.contains_key("metrics"));
         assert!(result.events[0].signals.contains_key("logs"));
@@ -600,6 +601,48 @@ mod tests {
     }
 
     #[test]
+    fn correlate_normalized_one_side_missing_timestamp_skipped() {
+        // One side has timestamp, other doesn't → should NOT match
+        // This prevents false positive correlations from unparseable timestamps
+        let metrics = make_normalized_result("metrics", vec![
+            make_normalized_row(Some(1000.0), vec![("host", "a")], Some("10")),
+        ]);
+        let logs = make_normalized_result("logs", vec![
+            make_normalized_row(None, vec![("host", "a")], Some("log")),
+        ]);
+
+        let plan = make_correlation_plan(vec!["host"], Some("60s"));
+        let result = correlate_normalized(
+            &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
+            &plan,
+        );
+        assert_eq!(result.events.len(), 0, "One-sided missing timestamp should not match");
+    }
+
+    #[test]
+    fn correlate_legacy_one_side_missing_timestamp_skipped() {
+        let metrics = make_backend_result("prometheus", serde_json::json!({
+            "data": {"result": [
+                {"metric": {"host": "srv-01"}, "value": [1000.0, "42"]}
+            ]}
+        }));
+        // Log with no _time field → timestamp_epoch = None
+        let logs = make_backend_result("victorialogs", serde_json::json!({
+            "result": [
+                {"host": "srv-01", "_msg": "error"}
+            ]
+        }));
+
+        let plan = make_correlation_plan(vec!["host"], Some("60s"));
+        let result = correlate(
+            &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
+            &plan,
+        );
+        // Metrics have epoch from value[0]=1000, logs have None → should skip
+        assert_eq!(result.events.len(), 0, "One-sided missing timestamp should not match");
+    }
+
+    #[test]
     fn correlate_normalized_cardinality_limit() {
         // Create enough entries to exceed MAX_CORRELATED_EVENTS
         // 200 metrics × 200 logs with same host = 40,000 potential matches
@@ -726,10 +769,11 @@ pub fn correlate_normalized(
             let m_ts = m.timestamp_epoch.unwrap_or(0.0);
             if m_ts > hi { break; } // past window, done
 
-            // If either side has no timestamp, match by field only
+            // Require both timestamps for time-based matching.
             let time_ok = match (m.timestamp_epoch, l.timestamp_epoch) {
                 (Some(_), Some(_)) => true, // already within window from binary search
-                _ => true, // no timestamps, match by field only
+                (None, None) => true, // both missing → field-only match
+                _ => false, // one side missing → skip (prevents false positives)
             };
 
             if !time_ok { continue; }

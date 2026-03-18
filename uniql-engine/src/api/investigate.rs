@@ -82,12 +82,24 @@ fn get_pack_queries(pack: &str) -> Option<Vec<(&'static str, &'static str)>> {
 }
 
 /// Substitute $param placeholders in a query string.
+/// Values are sanitized to prevent UNIQL injection attacks.
 fn substitute_params(query: &str, params: &HashMap<String, String>) -> String {
     let mut result = query.to_string();
     for (key, value) in params {
-        result = result.replace(&format!("${}", key), value);
+        let sanitized = sanitize_param_value(value);
+        result = result.replace(&format!("${}", key), &sanitized);
     }
     result
+}
+
+/// Sanitize a parameter value to prevent injection.
+/// Strips characters that could break out of quoted strings or inject UNIQL syntax.
+/// Allowlist approach: only alphanumeric, dots, hyphens, underscores, colons, slashes.
+fn sanitize_param_value(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '/' | ' '))
+        .collect()
 }
 
 #[cfg(test)]
@@ -251,6 +263,55 @@ mod tests {
         params.insert("host".to_string(), "srv-01.kocaeli.bel.tr".to_string());
         let result = substitute_params("host = \"$host\"", &params);
         assert!(result.contains("srv-01.kocaeli.bel.tr"));
+    }
+
+    // ─── Injection prevention ─────────────────────────────────────────
+
+    #[test]
+    fn sanitize_strips_quotes() {
+        let result = sanitize_param_value(r#"" OR service = "nginx"#);
+        assert!(!result.contains('"'), "Quotes should be stripped: {}", result);
+        assert!(!result.contains('='), "Operators should be stripped: {}", result);
+    }
+
+    #[test]
+    fn sanitize_strips_dangerous_chars() {
+        let result = sanitize_param_value(r#"test\path"#);
+        assert!(!result.contains('\\'), "Backslashes stripped: {}", result);
+        assert_eq!(result, "testpath");
+    }
+
+    #[test]
+    fn sanitize_newlines_removed() {
+        let result = sanitize_param_value("line1\nline2\rline3");
+        assert!(!result.contains('\n'));
+        assert!(!result.contains('\r'));
+    }
+
+    #[test]
+    fn sanitize_normal_value_unchanged() {
+        let result = sanitize_param_value("r750g01.kocaeli.bel.tr");
+        assert_eq!(result, "r750g01.kocaeli.bel.tr");
+    }
+
+    #[test]
+    fn sanitize_allows_safe_chars() {
+        assert_eq!(sanitize_param_value("host-01_prod"), "host-01_prod");
+        assert_eq!(sanitize_param_value("10.100.8.87:9090"), "10.100.8.87:9090");
+        assert_eq!(sanitize_param_value("/api/v1"), "/api/v1");
+    }
+
+    #[test]
+    fn substitute_with_injection_attempt() {
+        let mut params = HashMap::new();
+        params.insert("host".to_string(), r#"" OR service = "nginx"#.to_string());
+        let result = substitute_params("WHERE host = \"$host\"", &params);
+        // Dangerous chars (quotes, =, \) stripped, only safe chars remain
+        assert!(!result.contains(r#"""#) || result.ends_with('"'), "No unmatched quotes: {}", result);
+        // The sanitized value should not contain query operators
+        let sanitized = sanitize_param_value(r#"" OR service = "nginx"#);
+        assert!(!sanitized.contains('"'));
+        assert!(!sanitized.contains('='));
     }
 
     #[test]
