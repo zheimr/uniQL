@@ -141,16 +141,24 @@ export default function TranspileTab({ wasm, wasmLoading, transpile }: Props) {
 
   return (
     <div className="space-y-4 pt-4 animate-fade-in">
-      {/* Scenarios */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-wider mr-1">Examples:</span>
-        {scenarios.map((s) => (
-          <button key={s.id} onClick={() => pick(s)}
-            className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all cursor-pointer border ${
-              scenario.id === s.id ? 'border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 text-[var(--color-accent)]' : 'border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)]'
-            }`}
-          >{s.icon} {s.title}</button>
-        ))}
+      {/* Categorized examples */}
+      <div className="space-y-2">
+        {(['basics', 'filtering', 'aggregation', 'logs', 'advanced'] as const).map((cat) => {
+          const catScenarios = scenarios.filter(s => s.category === cat);
+          const catLabels: Record<string, string> = { basics: 'Basics', filtering: 'Filtering', aggregation: 'Aggregation', logs: 'Logs', advanced: 'Advanced' };
+          return (
+            <div key={cat} className="flex items-center gap-2 flex-wrap">
+              <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-wider w-20 shrink-0 text-right">{catLabels[cat]}</span>
+              {catScenarios.map((s) => (
+                <button key={s.id} onClick={() => pick(s)}
+                  className={`px-2 py-0.5 rounded text-[10px] font-medium transition-all cursor-pointer border ${
+                    scenario.id === s.id ? 'border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 text-[var(--color-accent)]' : 'border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)]'
+                  }`}
+                >{s.icon} {s.title}</button>
+              ))}
+            </div>
+          );
+        })}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
