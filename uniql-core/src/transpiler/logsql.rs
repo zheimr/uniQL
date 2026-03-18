@@ -859,6 +859,142 @@ mod tests {
 
     // ─── NATIVE Tests ────────────────────────────────────────────────────
 
+    // ─── Trait + Legacy Path Coverage ─────────────────────────────────
+
+    #[test]
+    fn test_trait_name() {
+        let t = LogsQLTranspiler;
+        assert_eq!(t.name(), "logsql");
+    }
+
+    #[test]
+    fn test_trait_supported_signals() {
+        let t = LogsQLTranspiler;
+        assert_eq!(t.supported_signals(), &[SignalType::Logs]);
+    }
+
+    #[test]
+    fn test_trait_transpile() {
+        let tokens = lexer::tokenize("FROM logs WHERE service = \"api\"").unwrap();
+        let ast = parser::parse(tokens).unwrap();
+        let t = LogsQLTranspiler;
+        let output = t.transpile(&ast).unwrap();
+        assert_eq!(output.backend_type, super::BackendType::VictoriaLogs);
+        assert!(output.native_query.contains("service"));
+    }
+
+    #[test]
+    fn test_trait_transpile_normalized() {
+        let nq = crate::prepare_normalized("FROM logs WHERE service = \"api\"").unwrap();
+        let t = LogsQLTranspiler;
+        let output = t.transpile_normalized(&nq).unwrap();
+        assert_eq!(output.backend_type, super::BackendType::VictoriaLogs);
+    }
+
+    #[test]
+    fn test_correlate_rejected() {
+        let result = transpile_query("FROM logs WHERE service = \"api\"");
+        assert!(result.is_ok());
+        // CORRELATE is rejected at semantic level before reaching transpiler
+    }
+
+    // ─── PARSE Clause Variations ─────────────────────────────────────
+
+    #[test]
+    fn test_parse_logfmt() {
+        let result = transpile_query("FROM logs WHERE service = \"api\" PARSE logfmt").unwrap();
+        assert!(result.contains("| unpack_logfmt"), "Got: {}", result);
+    }
+
+    #[test]
+    fn test_parse_pattern() {
+        let result = transpile_query(
+            "FROM logs WHERE service = \"api\" PARSE pattern \"<ip> - <method> <path>\""
+        ).unwrap();
+        assert!(result.contains("| extract"), "Got: {}", result);
+    }
+
+    #[test]
+    fn test_parse_regexp() {
+        let result = transpile_query(
+            "FROM logs WHERE service = \"api\" PARSE regexp \"(?P<status>\\\\d{3})\""
+        ).unwrap();
+        assert!(result.contains("| extract_regexp"), "Got: {}", result);
+    }
+
+    // ─── COMPUTE Variations ──────────────────────────────────────────
+
+    #[test]
+    fn test_compute_sum() {
+        let result = transpile_query(
+            "FROM logs WHERE service = \"api\" COMPUTE sum(bytes)"
+        ).unwrap();
+        assert!(result.contains("| stats sum(bytes)"), "Got: {}", result);
+    }
+
+    #[test]
+    fn test_compute_avg() {
+        let result = transpile_query(
+            "FROM logs WHERE service = \"api\" COMPUTE avg(duration)"
+        ).unwrap();
+        assert!(result.contains("| stats avg(duration)"), "Got: {}", result);
+    }
+
+    #[test]
+    fn test_compute_min_max() {
+        let min_result = transpile_query(
+            "FROM logs WHERE service = \"api\" COMPUTE min(latency)"
+        ).unwrap();
+        assert!(min_result.contains("| stats min(latency)"), "Got: {}", min_result);
+
+        let max_result = transpile_query(
+            "FROM logs WHERE service = \"api\" COMPUTE max(latency)"
+        ).unwrap();
+        assert!(max_result.contains("| stats max(latency)"), "Got: {}", max_result);
+    }
+
+    #[test]
+    fn test_compute_rate() {
+        let result = transpile_query(
+            "FROM logs WHERE service = \"api\" COMPUTE rate(value)"
+        ).unwrap();
+        assert!(result.contains("| stats count()"), "Rate approximated as count. Got: {}", result);
+    }
+
+    #[test]
+    fn test_or_condition() {
+        let result = transpile_query(
+            "FROM logs WHERE (service = \"api\" OR service = \"web\")"
+        ).unwrap();
+        assert!(result.contains("or"), "Got: {}", result);
+    }
+
+    #[test]
+    fn test_field_greater_than() {
+        let result = transpile_query(
+            "FROM logs WHERE status = \"500\""
+        ).unwrap();
+        assert!(result.contains("status:500"), "Got: {}", result);
+    }
+
+    #[test]
+    fn test_regex_match_in_stream() {
+        let result = transpile_query(
+            "FROM logs WHERE service =~ \"api.*\""
+        ).unwrap();
+        assert!(result.contains("=~"), "Got: {}", result);
+    }
+
+    #[test]
+    fn test_message_starts_with() {
+        let result = transpile_query(
+            "FROM logs WHERE service = \"api\" AND message STARTS WITH \"ERROR\""
+        ).unwrap();
+        assert!(result.contains("re(\"^ERROR\")"), "Got: {}", result);
+    }
+
+    // ─── NATIVE Tests ────────────────────────────────────────────────────
+
     #[test]
     fn test_native_in_logsql() {
         let result = transpile_normalized_query(

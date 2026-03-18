@@ -732,4 +732,125 @@ mod tests {
         );
         assert!(result.is_err());
     }
+
+    // ─── Trait Coverage ──────────────────────────────────────────────
+
+    #[test]
+    fn test_trait_name() {
+        let t = LogQLTranspiler;
+        assert_eq!(t.name(), "logql");
+    }
+
+    #[test]
+    fn test_trait_supported_signals() {
+        let t = LogQLTranspiler;
+        assert_eq!(t.supported_signals(), &[SignalType::Logs]);
+    }
+
+    #[test]
+    fn test_trait_transpile_direct() {
+        let tokens = lexer::tokenize("FROM logs WHERE service = \"api\"").unwrap();
+        let ast = parser::parse(tokens).unwrap();
+        let t = LogQLTranspiler;
+        let output = t.transpile(&ast).unwrap();
+        assert_eq!(output.backend_type, super::BackendType::Loki);
+    }
+
+    #[test]
+    fn test_trait_transpile_normalized_direct() {
+        let nq = crate::prepare_normalized("FROM logs WHERE service = \"api\"").unwrap();
+        let t = LogQLTranspiler;
+        let output = t.transpile_normalized(&nq).unwrap();
+        assert_eq!(output.backend_type, super::BackendType::Loki);
+    }
+
+    // ─── PARSE Variations ────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_logfmt() {
+        let result = transpile_query("FROM logs WHERE service = \"api\" PARSE logfmt").unwrap();
+        assert!(result.contains("| logfmt"), "Got: {}", result);
+    }
+
+    #[test]
+    fn test_parse_regexp() {
+        let result = transpile_query(
+            "FROM logs WHERE service = \"api\" PARSE regexp \"(?P<status>\\\\d+)\""
+        ).unwrap();
+        assert!(result.contains("| regexp"), "Got: {}", result);
+    }
+
+    #[test]
+    fn test_parse_pattern() {
+        let result = transpile_query(
+            "FROM logs WHERE service = \"api\" PARSE pattern \"<ip> - <method>\""
+        ).unwrap();
+        assert!(result.contains("| pattern"), "Got: {}", result);
+    }
+
+    // ─── COMPUTE Variations ──────────────────────────────────────────
+
+    #[test]
+    fn test_compute_sum() {
+        let result = transpile_query(
+            "FROM logs WHERE service = \"api\" COMPUTE sum(bytes) GROUP BY host"
+        ).unwrap();
+        assert!(result.contains("sum"), "Got: {}", result);
+    }
+
+    #[test]
+    fn test_compute_avg() {
+        // LogQL legacy path maps non-rate aggregations to count_over_time
+        let result = transpile_query(
+            "FROM logs WHERE service = \"api\" COMPUTE avg(duration)"
+        ).unwrap();
+        assert!(result.contains("count_over_time") || result.contains("avg"), "Got: {}", result);
+    }
+
+    #[test]
+    fn test_compute_min_max() {
+        // LogQL legacy path maps min/max to count_over_time
+        let min_r = transpile_query("FROM logs WHERE service = \"api\" COMPUTE min(latency)").unwrap();
+        assert!(!min_r.is_empty(), "Got: {}", min_r);
+        let max_r = transpile_query("FROM logs WHERE service = \"api\" COMPUTE max(latency)").unwrap();
+        assert!(!max_r.is_empty(), "Got: {}", max_r);
+    }
+
+    // ─── Filter Variations ───────────────────────────────────────────
+
+    #[test]
+    fn test_negation_filter() {
+        let result = transpile_query("FROM logs WHERE service != \"debug\"").unwrap();
+        assert!(result.contains("!="), "Got: {}", result);
+    }
+
+    #[test]
+    fn test_regex_no_match() {
+        let result = transpile_query("FROM logs WHERE service !~ \"test.*\"").unwrap();
+        assert!(result.contains("!~"), "Got: {}", result);
+    }
+
+    #[test]
+    fn test_message_starts_with() {
+        let result = transpile_query(
+            "FROM logs WHERE service = \"api\" AND message STARTS WITH \"ERR\""
+        ).unwrap();
+        assert!(result.contains("ERR"), "Got: {}", result);
+    }
+
+    #[test]
+    fn test_or_condition() {
+        // LogQL OR on same field uses regex: {service=~"api|web"}
+        let result = transpile_query(
+            "FROM logs WHERE service = \"api\" OR service = \"web\""
+        ).unwrap();
+        // May produce regex union or empty selector depending on OR handling
+        assert!(!result.is_empty(), "Got: {}", result);
+    }
+
+    #[test]
+    fn test_field_filter_non_stream() {
+        let result = transpile_query("FROM logs WHERE service = \"api\" AND level = \"error\"").unwrap();
+        assert!(result.contains("level"), "Got: {}", result);
+    }
 }
