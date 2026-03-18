@@ -96,6 +96,11 @@ impl PrometheusExecutor {
         }
     }
 
+    #[cfg(test)]
+    pub fn with_base_url(name: &str, base_url: &str) -> Self {
+        Self::new(name, base_url)
+    }
+
     /// Send an HTTP request with retry on transient failures.
     async fn send_with_retry<F>(&self, build_request: F) -> Result<reqwest::Response, ExecutionError>
     where
@@ -128,5 +133,92 @@ impl PrometheusExecutor {
             message: format!("HTTP request failed after {} retries: {}", MAX_RETRIES, last_err.unwrap()),
             backend: self.name.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::{MockServer, Mock, matchers, ResponseTemplate};
+
+    #[tokio::test]
+    async fn query_instant_success() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/api/v1/query"))
+            .and(matchers::query_param("query", "up"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "data": { "resultType": "vector", "result": [{"metric": {"job": "api"}, "value": [1000, "1"]}] }
+            })))
+            .mount(&server)
+            .await;
+
+        let exec = PrometheusExecutor::new("test", &server.uri());
+        let result = exec.query("up").await.unwrap();
+        assert_eq!(result.backend_name, "test");
+        assert_eq!(result.backend_type, "prometheus");
+        assert_eq!(result.data["status"], "success");
+        assert_eq!(result.data["data"]["result"][0]["value"][1], "1");
+    }
+
+    #[tokio::test]
+    async fn query_range_success() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/api/v1/query_range"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "data": { "resultType": "matrix", "result": [{"metric": {"job": "api"}, "values": [[1000, "1"], [1015, "2"]]}] }
+            })))
+            .mount(&server)
+            .await;
+
+        let exec = PrometheusExecutor::new("test", &server.uri());
+        let result = exec.query_range("up", "-1h", "now", "15s").await.unwrap();
+        assert_eq!(result.data["data"]["resultType"], "matrix");
+    }
+
+    #[tokio::test]
+    async fn query_backend_error_returns_error() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/api/v1/query"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "status": "error", "error": "bad query"
+            })))
+            .mount(&server)
+            .await;
+
+        let exec = PrometheusExecutor::new("test", &server.uri());
+        let result = exec.query("bad{").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("400"));
+    }
+
+    #[tokio::test]
+    async fn health_check_reachable() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/health"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let exec = PrometheusExecutor::new("test", &server.uri());
+        assert!(exec.health().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn health_check_unreachable() {
+        let exec = PrometheusExecutor::new("test", "http://127.0.0.1:1");
+        assert!(!exec.health().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn query_connection_refused() {
+        let exec = PrometheusExecutor::new("test", "http://127.0.0.1:1");
+        let result = exec.query("up").await;
+        assert!(result.is_err());
     }
 }

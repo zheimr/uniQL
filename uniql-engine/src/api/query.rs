@@ -208,3 +208,112 @@ pub async fn handle_query(
         },
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{EngineConfig, BackendConfig};
+    use crate::engine::AppState;
+    use wiremock::{MockServer, Mock, matchers, ResponseTemplate};
+
+    async fn setup_with_mock_backends() -> (Arc<AppState>, MockServer, MockServer) {
+        let prom = MockServer::start().await;
+        Mock::given(matchers::path("/api/v1/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "data": { "resultType": "vector", "result": [{"metric": {"__name__": "up", "job": "api"}, "value": [1000, "1"]}] }
+            })))
+            .mount(&prom)
+            .await;
+
+        let vlogs = MockServer::start().await;
+        Mock::given(matchers::path("/select/logsql/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"_msg":"test log","_time":"2026-03-18T10:00:00Z","job":"fortigate"}"#
+            ))
+            .mount(&vlogs)
+            .await;
+
+        let config = EngineConfig {
+            listen: "0.0.0.0:0".to_string(),
+            backends: vec![
+                BackendConfig { name: "victoria".to_string(), backend_type: "prometheus".to_string(), url: prom.uri() },
+                BackendConfig { name: "vlogs".to_string(), backend_type: "victorialogs".to_string(), url: vlogs.uri() },
+            ],
+            api_keys: vec![],
+            cors_origins: vec![],
+        };
+        (Arc::new(AppState { config }), prom, vlogs)
+    }
+
+    #[tokio::test]
+    async fn query_metrics_success() {
+        let (state, _prom, _vlogs) = setup_with_mock_backends().await;
+        let req = QueryRequest { query: "FROM metrics WHERE __name__ = \"up\"".to_string(), format: "json".to_string(), limit: 100 };
+        let result = handle_query(State(state), Json(req)).await;
+        assert!(result.is_ok());
+        let Json(resp) = result.unwrap();
+        assert_eq!(resp.status, "success");
+        assert_eq!(resp.metadata.signal_type, "metrics");
+        assert_eq!(resp.metadata.backend_type, "prometheus");
+    }
+
+    #[tokio::test]
+    async fn query_logs_success() {
+        let (state, _prom, _vlogs) = setup_with_mock_backends().await;
+        let req = QueryRequest { query: "FROM logs WHERE job = \"fortigate\"".to_string(), format: "json".to_string(), limit: 100 };
+        let result = handle_query(State(state), Json(req)).await;
+        assert!(result.is_ok());
+        let Json(resp) = result.unwrap();
+        assert_eq!(resp.status, "success");
+        assert_eq!(resp.metadata.backend_type, "victorialogs");
+    }
+
+    #[tokio::test]
+    async fn query_vlogs_routing() {
+        let (state, _prom, _vlogs) = setup_with_mock_backends().await;
+        let req = QueryRequest { query: "SHOW table FROM vlogs WHERE job = \"fortigate\"".to_string(), format: "json".to_string(), limit: 100 };
+        let result = handle_query(State(state), Json(req)).await;
+        assert!(result.is_ok());
+        let Json(resp) = result.unwrap();
+        assert_eq!(resp.metadata.backend_type, "victorialogs");
+    }
+
+    #[tokio::test]
+    async fn query_invalid_syntax_returns_error() {
+        let (state, _prom, _vlogs) = setup_with_mock_backends().await;
+        let req = QueryRequest { query: "NOT VALID UNIQL!!!".to_string(), format: "json".to_string(), limit: 100 };
+        let result = handle_query(State(state), Json(req)).await;
+        assert!(result.is_err());
+        let (status, _) = result.unwrap_err();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn query_with_within_uses_range() {
+        let (state, _prom, _vlogs) = setup_with_mock_backends().await;
+
+        // Need to add query_range mock
+        let prom2 = MockServer::start().await;
+        Mock::given(matchers::path("/api/v1/query_range"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "data": { "resultType": "matrix", "result": [] }
+            })))
+            .mount(&prom2)
+            .await;
+
+        let config = EngineConfig {
+            listen: "0.0.0.0:0".to_string(),
+            backends: vec![
+                BackendConfig { name: "victoria".to_string(), backend_type: "prometheus".to_string(), url: prom2.uri() },
+            ],
+            api_keys: vec![],
+            cors_origins: vec![],
+        };
+        let state = Arc::new(AppState { config });
+        let req = QueryRequest { query: "FROM metrics WHERE __name__ = \"up\" WITHIN last 1h".to_string(), format: "json".to_string(), limit: 100 };
+        let result = handle_query(State(state), Json(req)).await;
+        assert!(result.is_ok());
+    }
+}

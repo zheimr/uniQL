@@ -109,7 +109,7 @@ pub async fn panic_recovery(
 }
 
 /// Constant-time byte comparison to prevent timing attacks on API key validation.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -118,4 +118,151 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         diff |= x ^ y;
     }
     diff == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::EngineConfig;
+    use crate::engine::AppState;
+    use axum::{routing::get, Router, middleware};
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+    use std::sync::Arc;
+
+    fn test_state(api_keys: Vec<&str>) -> Arc<AppState> {
+        Arc::new(AppState {
+            config: EngineConfig {
+                listen: "0.0.0.0:0".to_string(),
+                backends: vec![],
+                api_keys: api_keys.into_iter().map(|s| s.to_string()).collect(),
+                cors_origins: vec![],
+            },
+        })
+    }
+
+    async fn ok_handler() -> &'static str { "ok" }
+
+    // ─── constant_time_eq ────────────────────────────────────────
+
+    #[test]
+    fn ct_eq_same() {
+        assert!(constant_time_eq(b"secret", b"secret"));
+    }
+
+    #[test]
+    fn ct_eq_different() {
+        assert!(!constant_time_eq(b"secret", b"wrong!"));
+    }
+
+    #[test]
+    fn ct_eq_different_length() {
+        assert!(!constant_time_eq(b"short", b"longer"));
+    }
+
+    #[test]
+    fn ct_eq_empty() {
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    // ─── request_id middleware ────────────────────────────────────
+
+    #[tokio::test]
+    async fn request_id_adds_header() {
+        let app = Router::new()
+            .route("/test", get(ok_handler))
+            .layer(middleware::from_fn(request_id));
+
+        let req = Request::builder().uri("/test").body(Body::empty()).unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), 200);
+        assert!(resp.headers().get("x-request-id").is_some());
+    }
+
+    // ─── api_key_auth middleware ──────────────────────────────────
+
+    #[tokio::test]
+    async fn auth_disabled_when_no_keys() {
+        let state = test_state(vec![]);
+        let app = Router::new()
+            .route("/v1/query", get(ok_handler))
+            .layer(middleware::from_fn_with_state(state.clone(), api_key_auth))
+            .with_state(state);
+
+        let req = Request::builder().uri("/v1/query").body(Body::empty()).unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn auth_health_exempt() {
+        let state = test_state(vec!["secret123"]);
+        let app = Router::new()
+            .route("/health", get(ok_handler))
+            .layer(middleware::from_fn_with_state(state.clone(), api_key_auth))
+            .with_state(state);
+
+        let req = Request::builder().uri("/health").body(Body::empty()).unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn auth_valid_key_accepted() {
+        let state = test_state(vec!["secret123"]);
+        let app = Router::new()
+            .route("/v1/query", get(ok_handler))
+            .layer(middleware::from_fn_with_state(state.clone(), api_key_auth))
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/v1/query")
+            .header("x-api-key", "secret123")
+            .body(Body::empty()).unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn auth_invalid_key_rejected() {
+        let state = test_state(vec!["secret123"]);
+        let app = Router::new()
+            .route("/v1/query", get(ok_handler))
+            .layer(middleware::from_fn_with_state(state.clone(), api_key_auth))
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/v1/query")
+            .header("x-api-key", "wrong")
+            .body(Body::empty()).unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), 403);
+    }
+
+    #[tokio::test]
+    async fn auth_missing_key_unauthorized() {
+        let state = test_state(vec!["secret123"]);
+        let app = Router::new()
+            .route("/v1/query", get(ok_handler))
+            .layer(middleware::from_fn_with_state(state.clone(), api_key_auth))
+            .with_state(state);
+
+        let req = Request::builder().uri("/v1/query").body(Body::empty()).unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), 401);
+    }
+
+    // ─── query_audit_log middleware ───────────────────────────────
+
+    #[tokio::test]
+    async fn audit_log_passes_through() {
+        let app = Router::new()
+            .route("/test", get(ok_handler))
+            .layer(middleware::from_fn(query_audit_log));
+
+        let req = Request::builder().uri("/test").body(Body::empty()).unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
 }

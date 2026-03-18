@@ -143,3 +143,99 @@ impl VictoriaLogsExecutor {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::{MockServer, Mock, matchers, ResponseTemplate};
+
+    #[tokio::test]
+    async fn query_success_ndjson() {
+        let server = MockServer::start().await;
+        // VLogs returns NDJSON (one JSON per line)
+        let body = r#"{"_msg":"log1","_time":"2026-03-18T10:00:00Z"}
+{"_msg":"log2","_time":"2026-03-18T10:00:01Z"}"#;
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/select/logsql/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let exec = VictoriaLogsExecutor::new("vlogs", &server.uri());
+        let result = exec.query("*", 100, "-5m").await.unwrap();
+        assert_eq!(result.backend_type, "victorialogs");
+        assert_eq!(result.data["status"], "success");
+        assert_eq!(result.data["result"].as_array().unwrap().len(), 2);
+        assert_eq!(result.data["result"][0]["_msg"], "log1");
+    }
+
+    #[tokio::test]
+    async fn query_range_with_end_param() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/select/logsql/query"))
+            .and(matchers::query_param("end", "now"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"_msg":"ok"}"#))
+            .mount(&server)
+            .await;
+
+        let exec = VictoriaLogsExecutor::new("vlogs", &server.uri());
+        let result = exec.query_range("*", 10, "-1h", "now").await.unwrap();
+        assert_eq!(result.data["result"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn query_empty_end_omitted() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/select/logsql/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(""))
+            .mount(&server)
+            .await;
+
+        let exec = VictoriaLogsExecutor::new("vlogs", &server.uri());
+        let result = exec.query_range("*", 10, "-5m", "").await.unwrap();
+        assert_eq!(result.data["result"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn query_backend_error() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/select/logsql/query"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("parse error"))
+            .mount(&server)
+            .await;
+
+        let exec = VictoriaLogsExecutor::new("vlogs", &server.uri());
+        let result = exec.query("bad query", 10, "-5m").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("400"));
+    }
+
+    #[tokio::test]
+    async fn health_check_reachable() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/health"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let exec = VictoriaLogsExecutor::new("vlogs", &server.uri());
+        assert!(exec.health().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn health_check_unreachable() {
+        let exec = VictoriaLogsExecutor::new("vlogs", "http://127.0.0.1:1");
+        assert!(!exec.health().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn query_connection_refused() {
+        let exec = VictoriaLogsExecutor::new("vlogs", "http://127.0.0.1:1");
+        let result = exec.query("*", 10, "-5m").await;
+        assert!(result.is_err());
+    }
+}
