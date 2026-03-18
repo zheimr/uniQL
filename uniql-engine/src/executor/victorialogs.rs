@@ -238,4 +238,81 @@ mod tests {
         let result = exec.query("*", 10, "-5m").await;
         assert!(result.is_err());
     }
+
+    #[tokio::test]
+    async fn query_partial_ndjson() {
+        let server = MockServer::start().await;
+        // Partial NDJSON — one valid line, one empty, one malformed
+        let body = r#"{"_msg":"valid"}
+
+not-json
+{"_msg":"also valid"}"#;
+        Mock::given(matchers::path("/select/logsql/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let exec = VictoriaLogsExecutor::new("vlogs", &server.uri());
+        let result = exec.query("*", 100, "-5m").await.unwrap();
+        // Should only parse valid JSON lines, skip malformed
+        assert_eq!(result.data["result"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn query_large_result() {
+        let server = MockServer::start().await;
+        let lines: Vec<String> = (0..200).map(|i| format!(r#"{{"_msg":"log {}","_time":"2026-03-18T10:00:{:02}Z"}}"#, i, i % 60)).collect();
+        Mock::given(matchers::path("/select/logsql/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(lines.join("\n")))
+            .mount(&server)
+            .await;
+
+        let exec = VictoriaLogsExecutor::new("vlogs", &server.uri());
+        let result = exec.query("*", 1000, "-1h").await.unwrap();
+        assert_eq!(result.data["result"].as_array().unwrap().len(), 200);
+        assert_eq!(result.data["total"], 200);
+    }
+
+    #[tokio::test]
+    async fn query_records_metadata() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::path("/select/logsql/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"_msg":"test"}"#))
+            .mount(&server)
+            .await;
+
+        let exec = VictoriaLogsExecutor::new("my-vlogs", &server.uri());
+        let result = exec.query("_stream:{job=\"api\"}", 50, "-10m").await.unwrap();
+        assert_eq!(result.backend_name, "my-vlogs");
+        assert_eq!(result.backend_type, "victorialogs");
+        assert_eq!(result.native_query, "_stream:{job=\"api\"}");
+        assert!(result.execute_time_ms < 1000);
+    }
+
+    #[tokio::test]
+    async fn stats_query_delegates_to_query() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::path("/select/logsql/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"count":"42"}"#))
+            .mount(&server)
+            .await;
+
+        let exec = VictoriaLogsExecutor::new("vlogs", &server.uri());
+        let result = exec.stats_query("* | stats count()", "-1h").await.unwrap();
+        assert_eq!(result.data["result"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn query_5xx_returns_error() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::path("/select/logsql/query"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
+            .mount(&server)
+            .await;
+
+        let exec = VictoriaLogsExecutor::new("vlogs", &server.uri());
+        let result = exec.query("*", 10, "-5m").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("500"));
+    }
 }

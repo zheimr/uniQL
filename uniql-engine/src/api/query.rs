@@ -290,6 +290,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn query_show_table_format() {
+        let (state, _prom, _vlogs) = setup_with_mock_backends().await;
+        let req = QueryRequest { query: "SHOW table FROM metrics WHERE __name__ = \"up\"".to_string(), format: "json".to_string(), limit: 100 };
+        let result = handle_query(State(state), Json(req)).await;
+        assert!(result.is_ok());
+        let Json(resp) = result.unwrap();
+        assert_eq!(resp.data["format"], "table");
+    }
+
+    #[tokio::test]
+    async fn query_show_count_format() {
+        let (state, _prom, _vlogs) = setup_with_mock_backends().await;
+        let req = QueryRequest { query: "SHOW count FROM metrics WHERE __name__ = \"up\"".to_string(), format: "json".to_string(), limit: 100 };
+        let result = handle_query(State(state), Json(req)).await;
+        assert!(result.is_ok());
+        let Json(resp) = result.unwrap();
+        assert_eq!(resp.data["format"], "count");
+    }
+
+    #[tokio::test]
+    async fn query_limit_applied() {
+        let (state, _prom, _vlogs) = setup_with_mock_backends().await;
+        let req = QueryRequest { query: "FROM metrics WHERE __name__ = \"up\"".to_string(), format: "json".to_string(), limit: 1 };
+        let result = handle_query(State(state), Json(req)).await;
+        assert!(result.is_ok());
+        let Json(resp) = result.unwrap();
+        // Original has 1 result, limit 1 should pass through
+        assert!(resp.data["data"]["result"].as_array().unwrap().len() <= 1);
+    }
+
+    #[tokio::test]
+    async fn query_metadata_populated() {
+        let (state, _prom, _vlogs) = setup_with_mock_backends().await;
+        let req = QueryRequest { query: "FROM metrics WHERE __name__ = \"up\"".to_string(), format: "json".to_string(), limit: 100 };
+        let result = handle_query(State(state), Json(req)).await.unwrap().0;
+        assert!(!result.metadata.query_id.is_empty());
+        assert!(result.metadata.total_time_ms < 5000);
+        assert!(!result.metadata.native_query.is_empty());
+    }
+
+    #[tokio::test]
+    async fn query_multi_signal_correlate() {
+        let (state, _prom, _vlogs) = setup_with_mock_backends().await;
+        let req = QueryRequest {
+            query: "FROM metrics, logs CORRELATE ON job WITHIN 60s".to_string(),
+            format: "json".to_string(),
+            limit: 100,
+        };
+        let result = handle_query(State(state), Json(req)).await;
+        assert!(result.is_ok());
+        let Json(resp) = result.unwrap();
+        assert_eq!(resp.metadata.signal_type, "metrics+logs");
+        assert_eq!(resp.metadata.backend_type, "multi");
+        // Should have correlation structure
+        assert!(resp.data.get("correlated_events").is_some() || resp.data.get("result_type").is_some());
+    }
+
+    #[tokio::test]
     async fn query_with_within_uses_range() {
         let (state, _prom, _vlogs) = setup_with_mock_backends().await;
 

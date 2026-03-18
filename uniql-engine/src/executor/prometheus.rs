@@ -221,4 +221,103 @@ mod tests {
         let result = exec.query("up").await;
         assert!(result.is_err());
     }
+
+    #[tokio::test]
+    async fn query_range_backend_error() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::path("/api/v1/query_range"))
+            .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
+                "status": "error", "error": "internal server error"
+            })))
+            .mount(&server)
+            .await;
+
+        let exec = PrometheusExecutor::new("test", &server.uri());
+        let result = exec.query_range("up", "-1h", "now", "15s").await;
+        // query_range doesn't check status — returns raw body
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().data["status"], "error");
+    }
+
+    #[tokio::test]
+    async fn query_malformed_json_response() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::path("/api/v1/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+
+        let exec = PrometheusExecutor::new("test", &server.uri());
+        let result = exec.query("up").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("parse"));
+    }
+
+    #[tokio::test]
+    async fn query_empty_result_set() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::path("/api/v1/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "data": { "resultType": "vector", "result": [] }
+            })))
+            .mount(&server)
+            .await;
+
+        let exec = PrometheusExecutor::new("test", &server.uri());
+        let result = exec.query("nonexistent_metric").await.unwrap();
+        assert_eq!(result.data["data"]["result"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn query_large_result_set() {
+        let server = MockServer::start().await;
+        let large_result: Vec<serde_json::Value> = (0..500).map(|i| serde_json::json!({
+            "metric": {"__name__": "up", "instance": format!("host-{}", i)},
+            "value": [1000, "1"]
+        })).collect();
+        Mock::given(matchers::path("/api/v1/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "data": { "resultType": "vector", "result": large_result }
+            })))
+            .mount(&server)
+            .await;
+
+        let exec = PrometheusExecutor::new("test", &server.uri());
+        let result = exec.query("up").await.unwrap();
+        assert_eq!(result.data["data"]["result"].as_array().unwrap().len(), 500);
+    }
+
+    #[tokio::test]
+    async fn query_records_execution_time() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::path("/api/v1/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success", "data": { "result": [] }
+            })))
+            .mount(&server)
+            .await;
+
+        let exec = PrometheusExecutor::new("test", &server.uri());
+        let result = exec.query("up").await.unwrap();
+        assert!(result.execute_time_ms < 1000); // should complete within 1s
+        assert_eq!(result.native_query, "up");
+    }
+
+    #[tokio::test]
+    async fn query_range_records_native_query() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::path("/api/v1/query_range"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success", "data": { "result": [] }
+            })))
+            .mount(&server)
+            .await;
+
+        let exec = PrometheusExecutor::new("prom", &server.uri());
+        let result = exec.query_range("rate(up[5m])", "-1h", "now", "15s").await.unwrap();
+        assert_eq!(result.native_query, "rate(up[5m])");
+        assert_eq!(result.backend_name, "prom");
+    }
 }
