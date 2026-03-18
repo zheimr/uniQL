@@ -222,6 +222,390 @@ fn parse_duration_secs(s: &str) -> f64 {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::normalize_result::{NormalizedResult, NormalizedRow};
+    use std::collections::HashMap;
+
+    fn make_correlation_plan(join_fields: Vec<&str>, time_window: Option<&str>) -> CorrelationPlan {
+        CorrelationPlan {
+            join_fields: join_fields.into_iter().map(|s| s.to_string()).collect(),
+            time_window: time_window.map(|s| s.to_string()),
+            skew_tolerance: None,
+        }
+    }
+
+    fn make_backend_result(backend_type: &str, data: Value) -> BackendResult {
+        BackendResult {
+            data,
+            backend_name: format!("{}_backend", backend_type),
+            backend_type: backend_type.to_string(),
+            native_query: "test".to_string(),
+            execute_time_ms: 1,
+        }
+    }
+
+    fn make_normalized_row(ts_epoch: Option<f64>, labels: Vec<(&str, &str)>, value: Option<&str>) -> NormalizedRow {
+        let mut label_map = HashMap::new();
+        for (k, v) in labels {
+            label_map.insert(k.to_string(), v.to_string());
+        }
+        NormalizedRow {
+            timestamp: ts_epoch.map(|e| format!("{}", e)),
+            timestamp_epoch: ts_epoch,
+            labels: label_map,
+            value: value.map(|s| s.to_string()),
+            raw: serde_json::json!({"test": true}),
+        }
+    }
+
+    fn make_normalized_result(signal_type: &str, rows: Vec<NormalizedRow>) -> NormalizedResult {
+        NormalizedResult {
+            rows,
+            backend_name: "test".to_string(),
+            backend_type: "test".to_string(),
+            signal_type: signal_type.to_string(),
+        }
+    }
+
+    // ─── parse_duration_secs ────────────────────────────────────────────
+
+    #[test]
+    fn parse_duration_seconds() {
+        assert!((parse_duration_secs("60s") - 60.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_duration_minutes() {
+        assert!((parse_duration_secs("5m") - 300.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_duration_hours() {
+        assert!((parse_duration_secs("1h") - 3600.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_duration_days() {
+        assert!((parse_duration_secs("7d") - 604800.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_duration_milliseconds() {
+        assert!((parse_duration_secs("500ms") - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_duration_bare_number_defaults_to_seconds() {
+        assert!((parse_duration_secs("120") - 120.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_duration_invalid_defaults_to_60() {
+        assert!((parse_duration_secs("abc") - 60.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_duration_whitespace_trimmed() {
+        assert!((parse_duration_secs("  30s  ") - 30.0).abs() < 0.001);
+    }
+
+    // ─── correlate (legacy path) ────────────────────────────────────────
+
+    #[test]
+    fn correlate_basic_field_match() {
+        // Use matching timestamps close together
+        let metrics = make_backend_result("prometheus", serde_json::json!({
+            "data": {"result": [
+                {"metric": {"host": "srv-01"}, "value": [1000.0, "42"]}
+            ]}
+        }));
+        let logs = make_backend_result("victorialogs", serde_json::json!({
+            "result": [
+                {"host": "srv-01", "_msg": "error"}
+            ]
+        }));
+
+        // Use large time window so timestamps don't matter (log has no _time so epoch=None → always matches)
+        let plan = make_correlation_plan(vec!["host"], Some("60s"));
+        let result = correlate(
+            &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
+            &plan,
+        );
+
+        assert_eq!(result.metadata.strategy, "TimeFieldJoin");
+        assert!(result.events.len() > 0, "Should correlate on matching host (no timestamp = field-only match)");
+        assert_eq!(result.events[0].join_fields.get("host").unwrap(), "srv-01");
+        assert!(result.events[0].signals.contains_key("metrics"));
+        assert!(result.events[0].signals.contains_key("logs"));
+    }
+
+    #[test]
+    fn correlate_no_field_match() {
+        let metrics = make_backend_result("prometheus", serde_json::json!({
+            "data": {"result": [
+                {"metric": {"host": "srv-01"}, "value": [1000.0, "1"]}
+            ]}
+        }));
+        let logs = make_backend_result("victorialogs", serde_json::json!({
+            "result": [
+                {"host": "srv-99", "_msg": "error"}
+            ]
+        }));
+
+        let plan = make_correlation_plan(vec!["host"], Some("60s"));
+        let result = correlate(
+            &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
+            &plan,
+        );
+        assert_eq!(result.events.len(), 0);
+    }
+
+    #[test]
+    fn correlate_time_window_outside() {
+        let metrics = make_backend_result("prometheus", serde_json::json!({
+            "data": {"result": [
+                {"metric": {"host": "srv-01"}, "value": [1000.0, "1"]}
+            ]}
+        }));
+        let logs = make_backend_result("victorialogs", serde_json::json!({
+            "result": [
+                {"host": "srv-01", "_msg": "err", "_time": "2026-03-17T20:31:36Z"}
+            ]
+        }));
+
+        // Very small time window — they won't match because epoch values are very different
+        let plan = make_correlation_plan(vec!["host"], Some("1s"));
+        let result = correlate(
+            &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
+            &plan,
+        );
+        // The metrics entry has epoch ~1000 and the log has epoch ~1774054296
+        // With 1s window they should not match
+        assert_eq!(result.events.len(), 0);
+    }
+
+    #[test]
+    fn correlate_empty_results() {
+        let metrics = make_backend_result("prometheus", serde_json::json!({"data": {"result": []}}));
+        let logs = make_backend_result("victorialogs", serde_json::json!({"result": []}));
+
+        let plan = make_correlation_plan(vec!["host"], Some("60s"));
+        let result = correlate(
+            &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
+            &plan,
+        );
+        assert_eq!(result.events.len(), 0);
+        assert_eq!(result.metadata.metrics_count, 0);
+        assert_eq!(result.metadata.logs_count, 0);
+    }
+
+    #[test]
+    fn correlate_metadata_counts() {
+        let metrics = make_backend_result("prometheus", serde_json::json!({
+            "data": {"result": [
+                {"metric": {"host": "a"}, "value": [100.0, "1"]},
+                {"metric": {"host": "b"}, "value": [100.0, "2"]},
+            ]}
+        }));
+        let logs = make_backend_result("victorialogs", serde_json::json!({
+            "result": [{"host": "a", "_msg": "err"}]
+        }));
+
+        let plan = make_correlation_plan(vec!["host"], Some("99999999s"));
+        let result = correlate(
+            &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
+            &plan,
+        );
+        assert_eq!(result.metadata.metrics_count, 2);
+        assert_eq!(result.metadata.logs_count, 1);
+    }
+
+    // ─── correlate_normalized ───────────────────────────────────────────
+
+    #[test]
+    fn correlate_normalized_basic_match() {
+        let metrics_rows = vec![
+            make_normalized_row(Some(1000.0), vec![("host", "srv-01")], Some("42")),
+        ];
+        let logs_rows = vec![
+            make_normalized_row(Some(1005.0), vec![("host", "srv-01")], Some("error")),
+        ];
+
+        let metrics = make_normalized_result("metrics", metrics_rows);
+        let logs = make_normalized_result("logs", logs_rows);
+
+        let plan = make_correlation_plan(vec!["host"], Some("60s"));
+        let result = correlate_normalized(
+            &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
+            &plan,
+        );
+
+        assert_eq!(result.metadata.strategy, "HashTimeWindowJoin");
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].join_fields.get("host").unwrap(), "srv-01");
+    }
+
+    #[test]
+    fn correlate_normalized_no_match_field() {
+        let metrics = make_normalized_result("metrics", vec![
+            make_normalized_row(Some(1000.0), vec![("host", "a")], None),
+        ]);
+        let logs = make_normalized_result("logs", vec![
+            make_normalized_row(Some(1000.0), vec![("host", "b")], None),
+        ]);
+
+        let plan = make_correlation_plan(vec!["host"], Some("60s"));
+        let result = correlate_normalized(
+            &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
+            &plan,
+        );
+        assert_eq!(result.events.len(), 0);
+    }
+
+    #[test]
+    fn correlate_normalized_outside_time_window() {
+        let metrics = make_normalized_result("metrics", vec![
+            make_normalized_row(Some(1000.0), vec![("host", "a")], None),
+        ]);
+        let logs = make_normalized_result("logs", vec![
+            make_normalized_row(Some(2000.0), vec![("host", "a")], None),
+        ]);
+
+        let plan = make_correlation_plan(vec!["host"], Some("10s"));
+        let result = correlate_normalized(
+            &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
+            &plan,
+        );
+        assert_eq!(result.events.len(), 0);
+    }
+
+    #[test]
+    fn correlate_normalized_multiple_matches() {
+        let metrics = make_normalized_result("metrics", vec![
+            make_normalized_row(Some(1000.0), vec![("host", "a")], Some("10")),
+            make_normalized_row(Some(1100.0), vec![("host", "a")], Some("20")),
+        ]);
+        let logs = make_normalized_result("logs", vec![
+            make_normalized_row(Some(1050.0), vec![("host", "a")], Some("err1")),
+        ]);
+
+        let plan = make_correlation_plan(vec!["host"], Some("60s"));
+        let result = correlate_normalized(
+            &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
+            &plan,
+        );
+        // Both metrics entries are within 60s of the log entry
+        assert_eq!(result.events.len(), 2);
+    }
+
+    #[test]
+    fn correlate_normalized_composite_join_key() {
+        let metrics = make_normalized_result("metrics", vec![
+            make_normalized_row(Some(1000.0), vec![("host", "a"), ("job", "api")], None),
+            make_normalized_row(Some(1000.0), vec![("host", "a"), ("job", "web")], None),
+        ]);
+        let logs = make_normalized_result("logs", vec![
+            make_normalized_row(Some(1000.0), vec![("host", "a"), ("job", "api")], None),
+        ]);
+
+        let plan = make_correlation_plan(vec!["host", "job"], Some("60s"));
+        let result = correlate_normalized(
+            &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
+            &plan,
+        );
+        // Only the host=a, job=api combo should match
+        assert_eq!(result.events.len(), 1);
+    }
+
+    #[test]
+    fn correlate_normalized_skew_tolerance() {
+        let metrics = make_normalized_result("metrics", vec![
+            make_normalized_row(Some(1000.0), vec![("host", "a")], None),
+        ]);
+        let logs = make_normalized_result("logs", vec![
+            make_normalized_row(Some(1070.0), vec![("host", "a")], None),
+        ]);
+
+        // 60s window + 15s skew = 75s total — entry at 1070 is within 75s of 1000
+        let mut plan = make_correlation_plan(vec!["host"], Some("60s"));
+        plan.skew_tolerance = Some("15s".to_string());
+        let result = correlate_normalized(
+            &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
+            &plan,
+        );
+        assert_eq!(result.events.len(), 1);
+    }
+
+    #[test]
+    fn correlate_normalized_empty() {
+        let metrics = make_normalized_result("metrics", vec![]);
+        let logs = make_normalized_result("logs", vec![]);
+        let plan = make_correlation_plan(vec!["host"], Some("60s"));
+        let result = correlate_normalized(
+            &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
+            &plan,
+        );
+        assert_eq!(result.events.len(), 0);
+        assert_eq!(result.metadata.correlated_count, 0);
+    }
+
+    #[test]
+    fn correlate_normalized_no_timestamps_match_by_field() {
+        let metrics = make_normalized_result("metrics", vec![
+            make_normalized_row(None, vec![("host", "a")], None),
+        ]);
+        let logs = make_normalized_result("logs", vec![
+            make_normalized_row(None, vec![("host", "a")], None),
+        ]);
+
+        let plan = make_correlation_plan(vec!["host"], Some("60s"));
+        let result = correlate_normalized(
+            &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
+            &plan,
+        );
+        // No timestamps, so should match by field only
+        assert_eq!(result.events.len(), 1);
+    }
+
+    #[test]
+    fn correlate_normalized_default_time_window() {
+        let metrics = make_normalized_result("metrics", vec![
+            make_normalized_row(Some(1000.0), vec![("host", "a")], None),
+        ]);
+        let logs = make_normalized_result("logs", vec![
+            make_normalized_row(Some(1050.0), vec![("host", "a")], None),
+        ]);
+
+        // No time_window → defaults to 60s
+        let plan = make_correlation_plan(vec!["host"], None);
+        let result = correlate_normalized(
+            &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
+            &plan,
+        );
+        assert_eq!(result.events.len(), 1);
+    }
+
+    #[test]
+    fn correlate_normalized_unknown_signal_treated_as_logs() {
+        let metrics = make_normalized_result("metrics", vec![
+            make_normalized_row(Some(1000.0), vec![("host", "a")], None),
+        ]);
+        let unknown = make_normalized_result("traces", vec![
+            make_normalized_row(Some(1000.0), vec![("host", "a")], None),
+        ]);
+
+        let plan = make_correlation_plan(vec!["host"], Some("60s"));
+        let result = correlate_normalized(
+            &[("metrics".to_string(), metrics), ("traces".to_string(), unknown)],
+            &plan,
+        );
+        // "traces" should be treated as logs
+        assert_eq!(result.events.len(), 1);
+    }
+}
+
 /// Correlate using pre-normalized results.
 /// Accepts NormalizedResult instead of raw BackendResult, avoiding re-parsing.
 pub fn correlate_normalized(
