@@ -52,7 +52,7 @@ pub async fn handle_health(
 
     Json(HealthResponse {
         status: if all_ok { "ok".to_string() } else { "degraded".to_string() },
-        version: "0.2.0".to_string(),
+        version: "0.3.0".to_string(),
         backends,
     })
 }

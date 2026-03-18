@@ -27,7 +27,7 @@ async fn main() {
 
     // Config
     let config = config::EngineConfig::load();
-    tracing::info!("UNIQL Engine v0.2.0");
+    tracing::info!("UNIQL Engine v0.3.0");
     tracing::info!("Listen: {}", config.listen);
     for bc in &config.backends {
         tracing::info!("Backend: {} ({}) → {}", bc.name, bc.backend_type, bc.url);

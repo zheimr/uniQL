@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { scenarios, type Scenario } from '../data/scenarios';
 
 interface WasmModule {
@@ -8,6 +8,7 @@ interface WasmModule {
   to_promql: (input: string) => string;
   validate: (input: string) => string;
   explain?: (input: string) => string;
+  autocomplete?: (input: string, cursor: number) => string;
 }
 
 interface Props {
@@ -24,9 +25,43 @@ interface ExplainStep {
   backend?: string;
 }
 
+interface ValidationResult {
+  valid: boolean;
+  error?: string;
+  signals?: string[];
+  clauses?: string;
+  warnings?: string[];
+}
+
 const ENGINE_URL = `http://${window.location.hostname}:9090`;
 const backendLabels: Record<string, string> = { promql: 'PromQL', logql: 'LogQL', logsql: 'LogsQL' };
 const allBackends = ['promql', 'logql', 'logsql'] as const;
+
+const UNIQL_KEYWORDS = /\b(SHOW|FROM|WHERE|AND|OR|NOT|WITHIN|COMPUTE|GROUP\s+BY|HAVING|CORRELATE|ON|PARSE|DEFINE|AS|IN|CONTAINS|MATCHES|STARTS_WITH|NATIVE)\b/gi;
+const UNIQL_STRINGS = /("(?:[^"\\]|\\.)*")/g;
+const UNIQL_NUMBERS = /\b(\d+\.?\d*(?:ms|s|m|h|d|w)?)\b/g;
+const UNIQL_FUNCTIONS = /\b(count|sum|avg|min|max|rate|p50|p90|p95|p99|json|logfmt|pattern|regexp)\b/gi;
+const UNIQL_FORMATS = /\b(timeseries|table|count|timeline|heatmap)\b/gi;
+
+function highlightUniql(code: string): string {
+  // Order matters: strings first (so keywords inside strings aren't colored)
+  let html = code
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(UNIQL_STRINGS, '<span style="color:var(--color-green)">$1</span>')
+    .replace(UNIQL_KEYWORDS, '<span style="color:var(--color-accent)">$1</span>')
+    .replace(UNIQL_FUNCTIONS, '<span style="color:var(--color-cyan)">$1</span>')
+    .replace(UNIQL_FORMATS, '<span style="color:var(--color-amber)">$1</span>');
+  // Numbers (but not inside already-colored spans)
+  html = html.replace(/(?<!style="[^"]*?)(?<![a-zA-Z_])(\d+\.?\d*(?:ms|s|m|h|d|w)?)(?![a-zA-Z])/g, (match, p1, offset) => {
+    // Skip if inside a span tag
+    const before = html.substring(0, offset);
+    const openSpans = (before.match(/<span/g) || []).length;
+    const closeSpans = (before.match(/<\/span>/g) || []).length;
+    if (openSpans > closeSpans) return match;
+    return `<span style="color:var(--color-amber)">${p1}</span>`;
+  });
+  return html;
+}
 
 export default function TranspileTab({ wasm, wasmLoading, transpile }: Props) {
   const [query, setQuery] = useState(scenarios[0].query);
@@ -35,9 +70,13 @@ export default function TranspileTab({ wasm, wasmLoading, transpile }: Props) {
   const [parseTime, setParseTime] = useState<number | null>(null);
   const [explainSteps, setExplainSteps] = useState<ExplainStep[] | null>(null);
   const [explainLoading, setExplainLoading] = useState(false);
+  const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const runTranspile = useCallback(() => {
-    if (!wasm || !query.trim()) { setResults({}); setParseTime(null); return; }
+    if (!wasm || !query.trim()) { setResults({}); setParseTime(null); setValidation(null); return; }
     const start = performance.now();
     const r: Record<string, string> = {};
     for (const b of allBackends) {
@@ -45,9 +84,47 @@ export default function TranspileTab({ wasm, wasmLoading, transpile }: Props) {
     }
     setParseTime(performance.now() - start);
     setResults(r);
+
+    // Validate
+    const mod = wasm as WasmModule;
+    try {
+      const v = JSON.parse(mod.validate(query.replace(/\n/g, ' ').trim()));
+      setValidation(v);
+    } catch { setValidation(null); }
   }, [wasm, query, transpile]);
 
   useEffect(() => { runTranspile(); }, [runTranspile]);
+
+  const handleQueryChange = (value: string) => {
+    setQuery(value);
+    setExplainSteps(null);
+
+    // Autocomplete
+    const mod = wasm as WasmModule | null;
+    if (mod?.autocomplete && textareaRef.current) {
+      try {
+        const cursor = textareaRef.current.selectionStart || value.length;
+        const result = JSON.parse(mod.autocomplete(value.replace(/\n/g, ' '), cursor));
+        const sug: string[] = result.suggestions || [];
+        setSuggestions(sug);
+        setShowSuggestions(sug.length > 0 && value.endsWith(' '));
+      } catch { setSuggestions([]); setShowSuggestions(false); }
+    }
+  };
+
+  const applySuggestion = (s: string) => {
+    const parts = query.trimEnd().split(/\s+/);
+    const lastWord = parts[parts.length - 1];
+    // If last word is partial match, replace it
+    if (lastWord && s.toLowerCase().startsWith(lastWord.toLowerCase())) {
+      parts[parts.length - 1] = s;
+    } else {
+      parts.push(s);
+    }
+    setQuery(parts.join(' ') + ' ');
+    setShowSuggestions(false);
+    textareaRef.current?.focus();
+  };
 
   const pick = (s: Scenario) => { setScenario(s); setQuery(s.query); setExplainSteps(null); };
 
@@ -55,7 +132,6 @@ export default function TranspileTab({ wasm, wasmLoading, transpile }: Props) {
     if (!query.trim()) return;
     setExplainLoading(true);
     try {
-      // Try server-side explain first
       const resp = await fetch(`${ENGINE_URL}/v1/explain`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -64,7 +140,6 @@ export default function TranspileTab({ wasm, wasmLoading, transpile }: Props) {
       const json = await resp.json();
       setExplainSteps(json.plan?.steps || []);
     } catch {
-      // Fallback to WASM explain if engine unreachable
       const mod = wasm as WasmModule | null;
       if (mod?.explain) {
         try {
@@ -105,19 +180,69 @@ export default function TranspileTab({ wasm, wasmLoading, transpile }: Props) {
 
       {/* Editor + outputs */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* UNIQL input */}
+        {/* UNIQL input with syntax highlighting overlay */}
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden">
           <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-3)]">
-            <span className="text-xs font-semibold text-[var(--color-accent)] tracking-wider">UNIQL INPUT</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-[var(--color-accent)] tracking-wider">UNIQL INPUT</span>
+              {validation && (
+                <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold ${
+                  validation.valid
+                    ? 'bg-[var(--color-green)]/15 text-[var(--color-green)]'
+                    : 'bg-[var(--color-red)]/15 text-[var(--color-red)]'
+                }`}>
+                  {validation.valid ? 'VALID' : 'ERROR'}
+                </span>
+              )}
+              {validation?.valid && validation.signals && (
+                <span className="text-[9px] text-[var(--color-text-dim)] font-mono">
+                  {validation.signals.join('+')} | {validation.clauses}
+                </span>
+              )}
+            </div>
             <span className="text-[10px] text-[var(--color-text-dim)]">{scenario.icon} {scenario.description}</span>
           </div>
-          <textarea
-            value={query}
-            onChange={(e) => { setQuery(e.target.value); setExplainSteps(null); }}
-            className="w-full p-4 bg-transparent text-[var(--color-accent)] font-mono text-sm resize-none focus:outline-none leading-relaxed min-h-[200px]"
-            spellCheck={false}
-          />
-          <div className="px-4 pb-3 flex items-center gap-2">
+
+          {/* Syntax-highlighted editor */}
+          <div className="relative">
+            <pre
+              className="p-4 font-mono text-sm leading-relaxed min-h-[200px] whitespace-pre-wrap break-words pointer-events-none"
+              aria-hidden="true"
+              dangerouslySetInnerHTML={{ __html: highlightUniql(query) + '\n' }}
+            />
+            <textarea
+              ref={textareaRef}
+              value={query}
+              onChange={(e) => handleQueryChange(e.target.value)}
+              onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+              className="absolute inset-0 p-4 bg-transparent text-transparent caret-[var(--color-accent)] font-mono text-sm resize-none focus:outline-none leading-relaxed"
+              spellCheck={false}
+            />
+            {/* Autocomplete dropdown */}
+            {showSuggestions && suggestions.length > 0 && (
+              <div className="absolute bottom-2 left-4 z-10 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] shadow-lg max-h-32 overflow-auto">
+                {suggestions.slice(0, 8).map((s) => (
+                  <button
+                    key={s}
+                    onMouseDown={() => applySuggestion(s)}
+                    className="block w-full text-left px-3 py-1 text-[11px] font-mono text-[var(--color-text)] hover:bg-[var(--color-accent)]/15 hover:text-[var(--color-accent)] cursor-pointer"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Validation error detail */}
+          {validation && !validation.valid && validation.error && (
+            <div className="px-4 py-2 border-t border-[var(--color-red)]/20 bg-[var(--color-red)]/5">
+              <span className="text-[10px] text-[var(--color-red)] font-mono">{validation.error}</span>
+            </div>
+          )}
+
+          {/* Action buttons */}
+          <div className="px-4 py-2 border-t border-[var(--color-border)] flex items-center gap-2">
             <button
               onClick={runExplain}
               disabled={explainLoading || !query.trim()}
@@ -125,7 +250,14 @@ export default function TranspileTab({ wasm, wasmLoading, transpile }: Props) {
             >
               {explainLoading ? 'Explaining...' : 'Explain Plan'}
             </button>
+            {validation?.valid && validation.warnings && validation.warnings.length > 0 && (
+              <span className="text-[9px] text-[var(--color-amber)]">
+                {validation.warnings.length} warning{validation.warnings.length > 1 ? 's' : ''}
+              </span>
+            )}
           </div>
+
+          {/* Explain plan */}
           {explainSteps && explainSteps.length > 0 && (
             <div className="border-t border-[var(--color-border)] px-4 py-3 space-y-1.5">
               <div className="text-[10px] font-semibold text-[var(--color-green)] uppercase tracking-wider mb-2">Execution Plan</div>

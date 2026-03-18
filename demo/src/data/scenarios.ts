@@ -94,6 +94,40 @@ WITHIN last 15m`,
     description: 'FortiGate logları — VictoriaLogs LogsQL ile',
     backend: 'logsql',
   },
+  {
+    id: 'compute-groupby',
+    title: 'COMPUTE + GROUP BY',
+    icon: '📊',
+    device: 'platform',
+    query: `FROM metrics
+WHERE __name__ = "up"
+COMPUTE count()
+GROUP BY job`,
+    description: 'Servis bazlı aggregation — count by job',
+    backend: 'promql',
+  },
+  {
+    id: 'parse-json',
+    title: 'PARSE JSON',
+    icon: '🔧',
+    device: 'fortigate',
+    query: `FROM logs
+WHERE job = "fortigate"
+PARSE json
+WITHIN last 5m`,
+    description: 'Log parsing pipeline — JSON field extraction',
+    backend: 'logsql',
+  },
+  {
+    id: 'define-macro',
+    title: 'DEFINE Macro',
+    icon: '🔁',
+    device: 'vcenter',
+    query: `DEFINE high_cpu = __name__ = "vsphere_host_cpu_usage_average"
+FROM metrics WHERE high_cpu`,
+    description: 'Reusable macro — DEFINE/USE pattern',
+    backend: 'promql',
+  },
 ];
 
 export const investigationSteps = [
