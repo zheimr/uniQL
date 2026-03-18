@@ -503,8 +503,8 @@ export default function LiveTab() {
         })}
       </div>
 
-      {/* Data Sources Grid */}
-      <DataSourcesGrid />
+      {/* Dual Stream: Metrics + Logs — Write Once, Query Everything */}
+      <MetricStream />
 
       {/* Log stream */}
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden">
@@ -704,100 +704,96 @@ function Spark({ data, color = 'var(--color-accent)' }: { data: number[]; color?
   );
 }
 
-// --- Data Sources Grid ---
+// --- Metric Stream: Live metric data from diverse sources ---
 
-interface DataSourceInfo {
-  name: string;
-  type: 'metrics' | 'logs';
-  icon: string;
+interface MetricStreamEntry {
+  source: string;
   color: string;
   uniql: string;
-  count: number | null;
-  loading: boolean;
+  label: string;
+  value: string;
+  labels: string;
+  ms: number;
 }
 
-const DATA_SOURCE_DEFS = [
-  { name: 'SNMP Devices', type: 'metrics' as const, icon: 'N', color: '#39d0d8', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "snmpv2_device_up"' },
-  { name: 'ESXi Hosts', type: 'metrics' as const, icon: 'H', color: '#d29922', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "vsphere_host_cpu_usage_average"' },
-  { name: 'vSphere VMs', type: 'metrics' as const, icon: 'V', color: '#7c5cfc', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "vsphere_vm_cpu_usage_average"' },
-  { name: 'Platform', type: 'metrics' as const, icon: 'S', color: '#3fb950', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "up"' },
-  { name: 'PostgreSQL', type: 'metrics' as const, icon: 'P', color: '#336791', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "pg_up"' },
-  { name: 'Valkey', type: 'metrics' as const, icon: 'R', color: '#e03c31', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "redis_up_info"' },
-  { name: 'Telegraf', type: 'metrics' as const, icon: 'T', color: '#00b4d8', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "internal_agent_go_goroutines" AND job = "telegraf"' },
-  { name: 'FortiGate Logs', type: 'logs' as const, icon: 'F', color: '#e09c5e', uniql: 'SHOW table FROM vlogs WHERE job = "fortigate" WITHIN last 1m' },
-  { name: 'FSSO Logs', type: 'logs' as const, icon: 'A', color: '#40c8d0', uniql: 'SHOW table FROM vlogs WHERE job = "fsso" WITHIN last 1m' },
+const METRIC_QUERIES = [
+  { source: 'vCenter', color: '#7c5cfc', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "vsphere_host_cpu_usage_average" WITHIN last 5m', label: 'ESXi CPU', extract: (r: MetricResult[]) => r.slice(0, 3).map(x => ({ val: parseFloat(x.value?.[1] || '0').toFixed(1) + '%', labels: x.metric.esxhostname || '?' })) },
+  { source: 'vCenter', color: '#9b7cf2', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "vsphere_host_mem_usage_average" WITHIN last 5m', label: 'ESXi Memory', extract: (r: MetricResult[]) => r.slice(0, 3).map(x => ({ val: parseFloat(x.value?.[1] || '0').toFixed(1) + '%', labels: x.metric.esxhostname || '?' })) },
+  { source: 'SNMP', color: '#39d0d8', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "count(snmpv2_device_up==1)"', label: 'Devices Online', extract: (r: MetricResult[]) => r.map(x => ({ val: x.value?.[1] || '0', labels: 'all' })) },
+  { source: 'Platform', color: '#3fb950', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "up"', label: 'Service Health', extract: (r: MetricResult[]) => r.slice(0, 5).map(x => ({ val: x.value?.[1] === '1' ? 'UP' : 'DOWN', labels: x.metric.job || '?' })) },
+  { source: 'PostgreSQL', color: '#336791', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "pg_stat_activity_count"', label: 'Active Connections', extract: (r: MetricResult[]) => r.slice(0, 3).map(x => ({ val: x.value?.[1] || '0', labels: x.metric.datname || x.metric.job || '?' })) },
+  { source: 'Telegraf', color: '#00b4d8', uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "vsphere_vm_cpu_usage_average" WITHIN last 5m', label: 'VM CPU Top 5', extract: (r: MetricResult[]) => r.sort((a, b) => parseFloat(b.value?.[1] || '0') - parseFloat(a.value?.[1] || '0')).slice(0, 5).map(x => ({ val: parseFloat(x.value?.[1] || '0').toFixed(1) + '%', labels: x.metric.vmname || '?' })) },
 ];
 
-function DataSourcesGrid() {
-  const [sources, setSources] = useState<DataSourceInfo[]>(
-    DATA_SOURCE_DEFS.map(d => ({ ...d, count: null, loading: true }))
-  );
+function MetricStream() {
+  const [entries, setEntries] = useState<MetricStreamEntry[]>([]);
+  const [totalMs, setTotalMs] = useState(0);
 
   useEffect(() => {
     const fetchAll = async () => {
+      const start = performance.now();
       const results = await Promise.allSettled(
-        DATA_SOURCE_DEFS.map(async (def) => {
+        METRIC_QUERIES.map(async (q) => {
           const resp = await fetch(`${ENGINE_URL}/v1/query`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query: def.uniql }),
+            body: JSON.stringify({ query: q.uniql }),
           });
           const json = await resp.json();
-          if (def.type === 'logs') {
-            const rows = json?.data?.rows || json?.data?.result || [];
-            return rows.length;
-          }
-          const result = json?.data?.data?.result || [];
-          return result.length;
+          const metricResults: MetricResult[] = json?.data?.data?.result ?? [];
+          const ms = json?.metadata?.total_time_ms ?? 0;
+          const extracted = q.extract(metricResults);
+          return extracted.map(e => ({
+            source: q.source,
+            color: q.color,
+            uniql: q.uniql,
+            label: q.label,
+            value: e.val,
+            labels: e.labels,
+            ms,
+          }));
         })
       );
 
-      setSources(prev => prev.map((s, i) => ({
-        ...s,
-        count: results[i].status === 'fulfilled' ? (results[i] as PromiseFulfilledResult<number>).value : 0,
-        loading: false,
-      })));
+      const allEntries: MetricStreamEntry[] = [];
+      for (const r of results) {
+        if (r.status === 'fulfilled') allEntries.push(...r.value);
+      }
+      setEntries(allEntries);
+      setTotalMs(Math.round(performance.now() - start));
     };
 
     fetchAll();
-    const interval = setInterval(fetchAll, 30_000);
+    const interval = setInterval(fetchAll, 15_000);
     return () => clearInterval(interval);
   }, []);
 
+  if (entries.length === 0) return null;
+
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-xs font-semibold text-[var(--color-text-dim)] uppercase tracking-wider">Data Sources — queried via UNIQL</span>
-        <div className="flex items-center gap-3 text-[9px] text-[var(--color-text-dim)]">
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]" /> Metrics (VictoriaMetrics)</span>
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[var(--color-amber)]" /> Logs (VictoriaLogs)</span>
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-3)]">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-[var(--color-accent)] tracking-wider">METRIC STREAM</span>
+          <span className="text-[10px] text-[var(--color-green)] font-mono">LIVE ({entries.length})</span>
+        </div>
+        <div className="flex items-center gap-3 text-[10px] text-[var(--color-text-dim)] font-mono">
+          <span>{totalMs}ms total</span>
+          <span className="text-[var(--color-text-dim)]">VictoriaMetrics via UNIQL</span>
         </div>
       </div>
-      <div className="grid grid-cols-3 lg:grid-cols-5 xl:grid-cols-9 gap-2">
-        {sources.map((s) => (
-          <div
-            key={s.name}
-            className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-3)] p-2.5 text-center transition-all hover:border-[var(--color-border-bright)]"
-          >
-            <div
-              className="w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-bold mx-auto mb-1.5"
-              style={{ background: `${s.color}18`, color: s.color, border: `1px solid ${s.color}40` }}
-            >
-              {s.icon}
-            </div>
-            <div className="text-[10px] text-[var(--color-text)] font-medium truncate">{s.name}</div>
-            <div className="text-sm font-bold font-mono mt-0.5" style={{ color: s.color }}>
-              {s.loading ? (
-                <span className="text-[var(--color-text-dim)]">...</span>
-              ) : s.count != null && s.count > 0 ? (
-                s.count.toLocaleString()
-              ) : (
-                <span className="text-[var(--color-text-dim)]">-</span>
-              )}
-            </div>
-            <div className="text-[8px] text-[var(--color-text-dim)] mt-0.5">
-              {s.type === 'logs' ? 'entries/min' : 'series'}
-            </div>
+      <div className="max-h-52 overflow-y-auto divide-y divide-[var(--color-border)]/30">
+        {entries.map((e, i) => (
+          <div key={i} className="px-4 py-1 hover:bg-[var(--color-surface-3)] transition-colors flex items-center gap-2">
+            <span className="text-[8px] font-mono px-1.5 py-0.5 rounded shrink-0" style={{ background: `${e.color}18`, color: e.color, border: `1px solid ${e.color}40` }}>
+              {e.source}
+            </span>
+            <span className="text-[10px] text-[var(--color-text-dim)] font-mono shrink-0 w-28 truncate">{e.label}</span>
+            <span className="text-[10px] text-[var(--color-text)] font-mono truncate flex-1">{e.labels}</span>
+            <span className="text-[10px] font-bold font-mono shrink-0" style={{ color: e.value === 'UP' ? 'var(--color-green)' : e.value === 'DOWN' ? 'var(--color-red)' : e.color }}>
+              {e.value}
+            </span>
+            <span className="text-[8px] text-[var(--color-text-dim)] font-mono shrink-0 w-8 text-right">{e.ms}ms</span>
           </div>
         ))}
       </div>
