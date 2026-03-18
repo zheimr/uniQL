@@ -151,6 +151,12 @@ const TIME_RANGES = [
   { label: '24h', value: '24h' },
 ];
 
+const LOG_SOURCES = [
+  { id: 'all', label: 'ALL', query: '*', color: 'var(--color-accent)' },
+  { id: 'fortigate', label: 'FortiGate', query: 'job = "fortigate"', color: 'var(--color-amber)' },
+  { id: 'fsso', label: 'FSSO', query: 'job = "fsso"', color: 'var(--color-cyan)' },
+];
+
 export default function LiveTab() {
   const [widgetStates, setWidgetStates] = useState<Record<string, WidgetState>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -160,6 +166,7 @@ export default function LiveTab() {
   const [engineLatency, setEngineLatency] = useState<number | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [timeRange, setTimeRange] = useState('5m');
+  const [logSource, setLogSource] = useState('fortigate');
   const [logState, setLogState] = useState<{
     native?: string;
     ms?: number;
@@ -254,10 +261,12 @@ export default function LiveTab() {
   // --- Fetch logs ---
   const fetchLogs = useCallback(async () => {
     try {
+      const source = LOG_SOURCES.find(s => s.id === logSource) || LOG_SOURCES[0];
+      const whereClause = source.id === 'all' ? '' : `WHERE ${source.query}`;
       const resp = await fetch(`${ENGINE_URL}/v1/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: `SHOW table FROM vlogs WHERE job = "fortigate" WITHIN last ${timeRange}` }),
+        body: JSON.stringify({ query: `SHOW table FROM vlogs ${whereClause} WITHIN last ${timeRange}` }),
       });
       const json: QueryResponse = await resp.json();
 
@@ -300,7 +309,7 @@ export default function LiveTab() {
       setLogs([]);
       setLogState({ fallback: true, error: 'Engine unreachable' });
     }
-  }, [timeRange]);
+  }, [timeRange, logSource]);
 
   // --- Fetch all ---
   const fetchAll = useCallback(async () => {
@@ -497,10 +506,26 @@ export default function LiveTab() {
       {/* Log stream */}
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden">
         <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-3)]">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             <span className="text-xs font-semibold text-[var(--color-amber)] tracking-wider">LOG STREAM</span>
+            <div className="flex items-center gap-0.5">
+              {LOG_SOURCES.map((src) => (
+                <button
+                  key={src.id}
+                  onClick={() => setLogSource(src.id)}
+                  className={`px-2 py-0.5 rounded text-[9px] font-semibold cursor-pointer transition-all ${
+                    logSource === src.id
+                      ? 'text-white'
+                      : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
+                  }`}
+                  style={logSource === src.id ? { background: `${src.color}30`, color: src.color, border: `1px solid ${src.color}50` } : { border: '1px solid transparent' }}
+                >
+                  {src.label}
+                </button>
+              ))}
+            </div>
             {!logState.fallback && (
-              <span className="text-[10px] text-[var(--color-green)] font-mono">LIVE ({logs.length})</span>
+              <span className="text-[10px] text-[var(--color-green)] font-mono">{logs.length} entries</span>
             )}
           </div>
           <div className="flex items-center gap-3 text-[10px] text-[var(--color-text-dim)] font-mono">
@@ -543,11 +568,14 @@ export default function LiveTab() {
               const time = entry._time as string | undefined;
               const action = entry.action as string | undefined;
               const srcIp = entry.source_ip as string | undefined;
-              const level = entry.level as string | undefined;
               const subtype = entry.subtype as string | undefined;
+              const job = entry.job as string | undefined;
+              const source = entry.source as string | undefined;
               const msg = entry._msg as string | undefined;
-              // Show compact syslog view: time | level | action | source_ip | truncated msg
-              const msgPreview = msg && msg.length > 200 ? msg.slice(0, 200) + '...' : msg;
+              const msgPreview = msg && msg.length > 180 ? msg.slice(0, 180) + '...' : msg;
+
+              const jobColor = job === 'fortigate' ? 'var(--color-amber)' : job === 'fsso' ? 'var(--color-cyan)' : 'var(--color-text-dim)';
+
               return (
                 <div key={i} className="px-4 py-1.5 hover:bg-[var(--color-surface-3)] transition-colors flex items-start gap-2">
                   {time && (
@@ -555,10 +583,18 @@ export default function LiveTab() {
                       {new Date(time).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                     </span>
                   )}
+                  {/* Source badge */}
+                  {logSource === 'all' && job && (
+                    <span className="text-[8px] font-mono px-1 py-0.5 rounded shrink-0" style={{ background: `${jobColor}18`, color: jobColor, border: `1px solid ${jobColor}40` }}>
+                      {job}
+                    </span>
+                  )}
+                  {/* FortiGate fields */}
                   {action && (
                     <span className={`text-[9px] font-mono px-1 py-0.5 rounded shrink-0 ${
                       action === 'deny' ? 'bg-[var(--color-red)]/15 text-[var(--color-red)]'
                         : action === 'accept' ? 'bg-[var(--color-green)]/15 text-[var(--color-green)]'
+                        : action === 'close' ? 'bg-[var(--color-text-dim)]/10 text-[var(--color-text-dim)]'
                         : 'bg-[var(--color-surface-3)] text-[var(--color-text-dim)]'
                     }`}>
                       {action}
@@ -570,8 +606,12 @@ export default function LiveTab() {
                   {srcIp && (
                     <span className="text-[9px] text-[var(--color-amber)] font-mono shrink-0">{srcIp}</span>
                   )}
+                  {/* FSSO fields */}
+                  {!action && source && (
+                    <span className="text-[9px] text-[var(--color-cyan)] font-mono shrink-0">{source}</span>
+                  )}
                   <span className="text-[10px] text-[var(--color-text)] font-mono break-all leading-relaxed min-w-0">
-                    {msgPreview ?? (level || JSON.stringify(entry).slice(0, 150))}
+                    {msgPreview ?? JSON.stringify(entry).slice(0, 150)}
                   </span>
                 </div>
               );
