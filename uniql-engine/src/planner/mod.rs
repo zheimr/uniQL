@@ -496,4 +496,152 @@ mod tests {
         // 604800 / 250 = 2419 → 40m
         assert_eq!(duration_to_step("7d"), "40m");
     }
+
+    // ─── Error paths ─────────────────────────────────────────────
+
+    #[test]
+    fn test_no_from_clause_error() {
+        // Build AST without FROM
+        let ast = uniql_core::ast::Query::new();
+        let result = plan(&ast, &default_config());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("No FROM"));
+    }
+
+    #[test]
+    fn test_unknown_backend_error() {
+        // Signal "traces" has no configured backend
+        let ast = uniql_core::prepare("FROM traces WHERE service = \"api\"").unwrap();
+        let mut config = default_config();
+        config.backends.clear(); // no backends
+        let result = plan(&ast, &config);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("No backend"));
+    }
+
+    #[test]
+    fn test_plan_error_display() {
+        let err = PlanError { message: "test error".to_string() };
+        assert_eq!(format!("{}", err), "Plan error: test error");
+    }
+
+    // ─── SHOW format variants ────────────────────────────────────
+
+    #[test]
+    fn test_show_table_format() {
+        let result = plan_query("SHOW table FROM metrics WHERE __name__ = \"up\"").unwrap();
+        assert_eq!(result.sub_queries[0].show_format, Some("table".to_string()));
+    }
+
+    #[test]
+    fn test_show_count_format() {
+        let result = plan_query("SHOW count FROM metrics WHERE __name__ = \"up\"").unwrap();
+        assert_eq!(result.sub_queries[0].show_format, Some("count".to_string()));
+    }
+
+    #[test]
+    fn test_show_timeseries_format() {
+        let result = plan_query("SHOW timeseries FROM metrics WHERE __name__ = \"up\"").unwrap();
+        assert_eq!(result.sub_queries[0].show_format, Some("timeseries".to_string()));
+    }
+
+    #[test]
+    fn test_show_timeline_format() {
+        let result = plan_query("SHOW timeline FROM logs WHERE service = \"api\"").unwrap();
+        assert_eq!(result.sub_queries[0].show_format, Some("timeline".to_string()));
+    }
+
+    #[test]
+    fn test_show_heatmap_format() {
+        let result = plan_query("SHOW heatmap FROM metrics WHERE __name__ = \"latency\"").unwrap();
+        assert_eq!(result.sub_queries[0].show_format, Some("heatmap".to_string()));
+    }
+
+    #[test]
+    fn test_no_show_format() {
+        let result = plan_query("FROM metrics WHERE __name__ = \"up\"").unwrap();
+        assert_eq!(result.sub_queries[0].show_format, None);
+    }
+
+    // ─── Correlation plan extraction ─────────────────────────────
+
+    #[test]
+    fn test_correlation_plan_extracted() {
+        let result = plan_query("FROM metrics, logs CORRELATE ON host WITHIN 60s").unwrap();
+        assert!(result.correlation.is_some());
+        let corr = result.correlation.unwrap();
+        assert_eq!(corr.join_fields, vec!["host"]);
+        assert_eq!(corr.time_window, Some("60s".to_string()));
+    }
+
+    #[test]
+    fn test_correlation_plan_multi_field() {
+        let result = plan_query("FROM metrics, logs CORRELATE ON host, job WITHIN 30s").unwrap();
+        let corr = result.correlation.unwrap();
+        assert_eq!(corr.join_fields, vec!["host", "job"]);
+    }
+
+    #[test]
+    fn test_no_correlation_for_single_signal() {
+        let result = plan_query("FROM metrics WHERE __name__ = \"up\"").unwrap();
+        assert!(result.correlation.is_none());
+    }
+
+    // ─── Multi-signal decomposition ──────────────────────────────
+
+    #[test]
+    fn test_multi_signal_produces_two_subqueries() {
+        let result = plan_query("FROM metrics, logs CORRELATE ON host WITHIN 60s").unwrap();
+        assert_eq!(result.sub_queries.len(), 2);
+        let types: Vec<&str> = result.sub_queries.iter().map(|sq| sq.signal_type.as_str()).collect();
+        assert!(types.contains(&"metrics"));
+        assert!(types.contains(&"logs"));
+    }
+
+    // ─── WITHIN variants ─────────────────────────────────────────
+
+    #[test]
+    fn test_within_this_week() {
+        let ast = uniql_core::prepare("FROM metrics WHERE __name__ = \"up\" WITHIN this_week").unwrap();
+        let result = plan(&ast, &default_config()).unwrap();
+        let sq = &result.sub_queries[0];
+        assert!(sq.has_time_range);
+        assert_eq!(sq.time_start, "-7d");
+        assert_eq!(sq.step, "5m");
+    }
+
+    #[test]
+    fn test_within_today() {
+        let ast = uniql_core::prepare("FROM metrics WHERE __name__ = \"up\" WITHIN today").unwrap();
+        let result = plan(&ast, &default_config()).unwrap();
+        let sq = &result.sub_queries[0];
+        assert!(sq.has_time_range);
+        assert_eq!(sq.time_start, "today");
+        assert_eq!(sq.step, "1m");
+    }
+
+    #[test]
+    fn test_parse_duration_seconds() {
+        assert_eq!(parse_duration_secs("30s"), 30);
+    }
+
+    #[test]
+    fn test_parse_duration_weeks() {
+        assert_eq!(parse_duration_secs("1w"), 604800);
+    }
+
+    #[test]
+    fn test_parse_duration_ms() {
+        assert_eq!(parse_duration_secs("500ms"), 1);
+    }
+
+    #[test]
+    fn test_duration_to_step_1h() {
+        assert_eq!(duration_to_step("1h"), "15s");
+    }
+
+    #[test]
+    fn test_duration_to_step_30m() {
+        assert_eq!(duration_to_step("30m"), "15s"); // 1800/250=7.2, max(7,15)=15
+    }
 }

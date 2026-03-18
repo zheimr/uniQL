@@ -199,6 +199,72 @@ mod tests {
     }
 
     #[test]
+    fn link_down_has_firewall_logs() {
+        let queries = get_pack_queries("link_down").unwrap();
+        let has_vlogs = queries.iter().any(|(_, q)| q.contains("vlogs"));
+        assert!(has_vlogs, "link_down should include VLogs query for firewall logs");
+    }
+
+    #[test]
+    fn latency_queries_use_service_param() {
+        let queries = get_pack_queries("latency_degradation").unwrap();
+        let has_service = queries.iter().any(|(_, q)| q.contains("$service"));
+        assert!(has_service, "latency_degradation should use $service");
+    }
+
+    #[test]
+    fn link_down_queries_use_host_param() {
+        let queries = get_pack_queries("link_down").unwrap();
+        let has_host = queries.iter().any(|(_, q)| q.contains("$host"));
+        assert!(has_host, "link_down should use $host");
+    }
+
+    #[test]
+    fn all_packs_have_3_queries() {
+        for pack in &["high_cpu", "error_spike", "latency_degradation", "link_down"] {
+            let queries = get_pack_queries(pack).unwrap();
+            assert_eq!(queries.len(), 3, "Pack '{}' should have 3 queries", pack);
+        }
+    }
+
+    #[test]
+    fn all_packs_have_unique_query_names() {
+        for pack in &["high_cpu", "error_spike", "latency_degradation", "link_down"] {
+            let queries = get_pack_queries(pack).unwrap();
+            let names: Vec<&str> = queries.iter().map(|(n, _)| *n).collect();
+            let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
+            assert_eq!(names.len(), unique.len(), "Pack '{}' has duplicate query names", pack);
+        }
+    }
+
+    #[test]
+    fn substitute_empty_value() {
+        let mut params = HashMap::new();
+        params.insert("host".to_string(), "".to_string());
+        let result = substitute_params("host = \"$host\"", &params);
+        assert_eq!(result, "host = \"\"");
+    }
+
+    #[test]
+    fn substitute_special_chars_in_value() {
+        let mut params = HashMap::new();
+        params.insert("host".to_string(), "srv-01.kocaeli.bel.tr".to_string());
+        let result = substitute_params("host = \"$host\"", &params);
+        assert!(result.contains("srv-01.kocaeli.bel.tr"));
+    }
+
+    #[test]
+    fn all_pack_queries_contain_within() {
+        // All AETHERIS packs should have WITHIN for time-bounded queries
+        for pack in &["high_cpu", "error_spike", "latency_degradation", "link_down"] {
+            let queries = get_pack_queries(pack).unwrap();
+            for (name, query) in &queries {
+                assert!(query.contains("WITHIN"), "Pack '{}' query '{}' missing WITHIN clause", pack, name);
+            }
+        }
+    }
+
+    #[test]
     fn pack_queries_are_valid_uniql() {
         // All pack templates (with params substituted) should be parseable
         let packs = vec!["high_cpu", "error_spike", "latency_degradation", "link_down"];
