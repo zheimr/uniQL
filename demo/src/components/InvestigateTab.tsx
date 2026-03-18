@@ -188,9 +188,7 @@ export default function InvestigateTab({ engine }: Props) {
                       </div>
                     )}
                     {r.error && <div className="text-[10px] text-[var(--color-red)]">{r.error}</div>}
-                    <pre className="text-[10px] text-[var(--color-text-dim)] font-mono max-h-32 overflow-auto bg-[var(--color-surface)] rounded p-2">
-                      {JSON.stringify(r.data, null, 2)}
-                    </pre>
+                    <DataPreview data={r.data} />
                   </div>
                 </div>
               ))}
@@ -199,5 +197,73 @@ export default function InvestigateTab({ engine }: Props) {
         </div>
       </div>
     </div>
+  );
+}
+
+function DataPreview({ data }: { data: unknown }) {
+  if (!data || data === null) return <div className="text-[10px] text-[var(--color-text-dim)]">No data</div>;
+
+  const d = data as Record<string, unknown>;
+
+  // Prometheus format: data.result[]
+  const promResult = (d?.data as Record<string, unknown>)?.result;
+  if (Array.isArray(promResult) && promResult.length > 0) {
+    return (
+      <div className="space-y-1">
+        <div className="text-[9px] text-[var(--color-text-dim)]">{promResult.length} series</div>
+        <div className="max-h-28 overflow-auto space-y-0.5">
+          {promResult.slice(0, 8).map((item: Record<string, unknown>, i: number) => {
+            const metric = item.metric as Record<string, string> | undefined;
+            const value = (item.value as [number, string])?.[1];
+            const labels = metric ? Object.entries(metric).filter(([k]) => k !== '__name__').map(([k, v]) => `${k}=${v}`).join(', ') : '';
+            const name = (metric as Record<string, string>)?.__name__ || '';
+            return (
+              <div key={i} className="flex items-center gap-2 text-[10px] font-mono">
+                {name && <span className="text-[var(--color-accent)] shrink-0">{name}</span>}
+                {labels && <span className="text-[var(--color-text-dim)] truncate">{'{' + labels + '}'}</span>}
+                {value && <span className="text-[var(--color-green)] ml-auto shrink-0">{parseFloat(value).toFixed(2)}</span>}
+              </div>
+            );
+          })}
+          {promResult.length > 8 && <div className="text-[9px] text-[var(--color-text-dim)]">+{promResult.length - 8} more...</div>}
+        </div>
+      </div>
+    );
+  }
+
+  // VLogs format: result[]
+  const vlogsResult = d?.result;
+  if (Array.isArray(vlogsResult) && vlogsResult.length > 0) {
+    return (
+      <div className="space-y-1">
+        <div className="text-[9px] text-[var(--color-text-dim)]">{vlogsResult.length} log entries</div>
+        <div className="max-h-28 overflow-auto space-y-0.5">
+          {vlogsResult.slice(0, 5).map((entry: Record<string, unknown>, i: number) => {
+            const msg = (entry._msg as string) || '';
+            const preview = msg.length > 120 ? msg.slice(0, 120) + '...' : msg;
+            return (
+              <div key={i} className="text-[10px] font-mono text-[var(--color-text-dim)] truncate">{preview || JSON.stringify(entry).slice(0, 120)}</div>
+            );
+          })}
+          {vlogsResult.length > 5 && <div className="text-[9px] text-[var(--color-text-dim)]">+{vlogsResult.length - 5} more...</div>}
+        </div>
+      </div>
+    );
+  }
+
+  // Table format
+  if (d?.format === 'table' && Array.isArray(d?.rows)) {
+    const rows = d.rows as unknown[][];
+    return (
+      <div className="text-[9px] text-[var(--color-text-dim)]">{rows.length} rows (table format)</div>
+    );
+  }
+
+  // Fallback: raw JSON
+  const json = JSON.stringify(data, null, 2);
+  return (
+    <pre className="text-[10px] text-[var(--color-text-dim)] font-mono max-h-24 overflow-auto bg-[var(--color-surface)] rounded p-2">
+      {json.length > 500 ? json.slice(0, 500) + '\n...' : json}
+    </pre>
   );
 }

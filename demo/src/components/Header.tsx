@@ -26,6 +26,7 @@ export default function Header({ tab, setTab, engine, wasmReady, now }: Props) {
         <div className="flex items-center gap-2 mr-2 shrink-0">
           <div className="w-6 h-6 rounded bg-gradient-to-br from-[var(--color-accent)] to-[var(--color-cyan)] flex items-center justify-center text-[10px] font-bold text-white">U</div>
           <span className="text-[var(--color-text-bright)] font-semibold tracking-wide text-sm">UNIQL</span>
+          <span className="text-[9px] text-[var(--color-text-dim)] font-mono">v0.3</span>
         </div>
 
         {/* Tabs */}

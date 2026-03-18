@@ -21,8 +21,8 @@ const transpileTargets = [
 ];
 
 const pipelineLayers = [
-  'Lexer', 'Parser', 'AST', 'Semantic', 'TypeCheck', 'Macro',
-  'Optimize', 'Plan', 'Validate', 'IR Gen', 'Transpile', 'Format',
+  'Lexer', 'Parser', 'Expander', 'Binder', 'Validator', 'Normalizer',
+  'Planner', 'Transpiler', 'Executor', 'Normalizer²', 'Correlator', 'Formatter',
 ];
 
 const layerColors = [
@@ -119,7 +119,7 @@ export default function OverviewTab({ engine, wasm, transpile, setTab }: Props) 
               Unified observability query language — single syntax for metrics, logs, and traces across all backends
             </p>
             <div className="flex items-center gap-2 flex-wrap">
-              {['Rust Engine', 'WASM Transpiler', '12-Layer Pipeline', 'Sub-ms Parse'].map((tag) => (
+              {['v0.3.0', '332 Tests', '72% Coverage', '12-Layer Pipeline', 'Sub-ms Parse', 'Retry + Panic Recovery'].map((tag) => (
                 <span key={tag} className="text-[10px] px-2 py-0.5 rounded border border-[var(--color-border)] text-[var(--color-text-dim)] bg-[var(--color-surface-3)]">{tag}</span>
               ))}
             </div>
@@ -249,10 +249,11 @@ export default function OverviewTab({ engine, wasm, transpile, setTab }: Props) 
             <div className="text-xs font-semibold text-[var(--color-text-dim)] uppercase tracking-wider mb-2">Architecture</div>
             <div className="space-y-1.5 text-[11px]">
               {[
-                { label: 'Engine', value: 'Rust + Tokio', color: 'var(--color-accent)' },
-                { label: 'Browser', value: 'WASM (wasm-bindgen)', color: 'var(--color-cyan)' },
-                { label: 'Metrics', value: 'VictoriaMetrics', color: 'var(--color-green)' },
-                { label: 'Logs', value: 'VictoriaLogs', color: 'var(--color-amber)' },
+                { label: 'Engine', value: 'Rust + Axum + Tokio', color: 'var(--color-accent)' },
+                { label: 'Browser', value: 'WASM (7 functions)', color: 'var(--color-cyan)' },
+                { label: 'Metrics', value: 'VictoriaMetrics (PromQL)', color: 'var(--color-green)' },
+                { label: 'Logs', value: 'VictoriaLogs (LogsQL)', color: 'var(--color-amber)' },
+                { label: 'Tests', value: '332 tests, 72% coverage', color: 'var(--color-green)' },
                 { label: 'Platform', value: 'AETHERIS (6 modules)', color: 'var(--color-text)' },
               ].map(r => (
                 <div key={r.label} className="flex items-center justify-between">
@@ -270,12 +271,12 @@ export default function OverviewTab({ engine, wasm, transpile, setTab }: Props) 
         <ActionCard
           icon={<span className="relative flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--color-green)] opacity-75" /><span className="relative inline-flex rounded-full h-3 w-3 bg-[var(--color-green)]" /></span>}
           title="AETHERIS Live"
-          desc="721 SNMP cihazı, 370 VM — gerçek zamanlı"
+          desc="Metrics + FortiGate log stream — WITHIN time range"
           color="var(--color-green)"
           onClick={() => setTab('live')}
         />
-        <ActionCard icon="{}" title="Transpile" desc="WASM ile anında UNIQL → PromQL/LogQL" color="var(--color-accent)" onClick={() => setTab('transpile')} />
-        <ActionCard icon="?" title="Investigate" desc="Alert → 3 paralel sorgu → root cause" color="var(--color-amber)" onClick={() => setTab('investigate')} />
+        <ActionCard icon="{}" title="Transpile + Explain" desc="WASM transpile + execution plan viewer" color="var(--color-accent)" onClick={() => setTab('transpile')} />
+        <ActionCard icon="?" title="Investigate" desc="ESXi CPU, SNMP link, SOC — AETHERIS packs" color="var(--color-amber)" onClick={() => setTab('investigate')} />
         <ComparisonCard />
       </div>
     </div>
@@ -323,10 +324,10 @@ function ActionCard({ icon, title, desc, color, onClick }: { icon: string | Reac
 
 function ComparisonCard() {
   const rows = [
-    { label: 'Query Language', before: '6+ different', after: '1 UNIQL' },
-    { label: 'RCA', before: 'Manual', after: 'Auto 3-query' },
-    { label: 'Vendor Lock', before: 'PromQL/SPL/KQL', after: 'Neutral' },
-    { label: 'Parse Speed', before: '10-50ms', after: '<1ms WASM' },
+    { label: 'Query Syntax', before: '6+ (PromQL/LogsQL/...)', after: '1 UNIQL' },
+    { label: 'Investigation', before: 'Manual copy-paste', after: 'Parallel 3-query pack' },
+    { label: 'Time Range', before: 'Per-backend param', after: 'WITHIN last 1h' },
+    { label: 'Cross-Signal', before: 'Not possible', after: 'CORRELATE ON host' },
   ];
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
