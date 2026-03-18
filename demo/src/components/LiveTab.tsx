@@ -32,10 +32,16 @@ interface QueryResponse {
   };
 }
 
+interface RangeResult {
+  metric: Record<string, string>;
+  values: [number, string][];
+}
+
 interface WidgetConfig {
   id: string;
   title: string;
   uniql: string;
+  rangeQuery?: string;
   unit: string;
   icon: string;
   color: string;
@@ -52,6 +58,7 @@ interface WidgetState {
   parseUs?: number;
   transpileUs?: number;
   history: number[];
+  rangeData: [number, string][];
   loading: boolean;
   error?: string;
 }
@@ -75,6 +82,7 @@ const WIDGETS: WidgetConfig[] = [
     id: 'snmp',
     title: 'SNMP Devices',
     uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "count(snmpv2_device_up==1)"',
+    rangeQuery: 'SHOW timeseries FROM victoria WHERE __name__ = "count(snmpv2_device_up==1)" WITHIN last 1h',
     unit: 'online',
     icon: 'N',
     color: '#39d0d8',
@@ -89,6 +97,7 @@ const WIDGETS: WidgetConfig[] = [
     id: 'vms',
     title: 'vSphere VMs',
     uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "count(count by (vmname)(vsphere_vm_cpu_usage_average))"',
+    rangeQuery: 'SHOW timeseries FROM victoria WHERE __name__ = "count(count by (vmname)(vsphere_vm_cpu_usage_average))" WITHIN last 1h',
     unit: 'active',
     icon: 'V',
     color: '#7c5cfc',
@@ -103,6 +112,7 @@ const WIDGETS: WidgetConfig[] = [
     id: 'esxi',
     title: 'ESXi Host CPU',
     uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "avg(vsphere_host_cpu_usage_average)"',
+    rangeQuery: 'SHOW timeseries FROM victoria WHERE __name__ = "avg(vsphere_host_cpu_usage_average)" WITHIN last 1h',
     unit: '%',
     icon: 'H',
     color: '#d29922',
@@ -117,6 +127,7 @@ const WIDGETS: WidgetConfig[] = [
     id: 'services',
     title: 'Services Up',
     uniql: 'SHOW timeseries FROM victoria WHERE __name__ = "up"',
+    rangeQuery: 'SHOW timeseries FROM victoria WHERE __name__ = "count(up==1)" WITHIN last 1h',
     unit: '',
     icon: 'S',
     color: '#3fb950',
@@ -176,14 +187,35 @@ export default function LiveTab() {
   // --- Fetch a single widget ---
   const fetchWidget = useCallback(async (widget: WidgetConfig) => {
     try {
-      const resp = await fetch(`${ENGINE_URL}/v1/query`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: widget.uniql }),
-      });
-      const json: QueryResponse = await resp.json();
+      // Fetch instant value + range data in parallel
+      const [instantResp, rangeResp] = await Promise.all([
+        fetch(`${ENGINE_URL}/v1/query`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: widget.uniql }),
+        }),
+        widget.rangeQuery
+          ? fetch(`${ENGINE_URL}/v1/query`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ query: widget.rangeQuery }),
+            })
+          : Promise.resolve(null),
+      ]);
+
+      const json: QueryResponse = await instantResp.json();
       const results: MetricResult[] = json.data?.data?.result ?? [];
       const { display, numeric } = widget.extract(results);
+
+      // Extract range data (matrix values)
+      let rangeData: [number, string][] = [];
+      if (rangeResp) {
+        const rangeJson = await rangeResp.json();
+        const rangeResults: RangeResult[] = rangeJson?.data?.data?.result ?? [];
+        if (rangeResults.length > 0 && rangeResults[0].values) {
+          rangeData = rangeResults[0].values;
+        }
+      }
 
       setWidgetStates((prev) => {
         const prevHistory = prev[widget.id]?.history ?? [];
@@ -199,6 +231,7 @@ export default function LiveTab() {
             parseUs: json.metadata?.parse_time_us,
             transpileUs: json.metadata?.transpile_time_us,
             history: newHistory,
+            rangeData,
             loading: false,
           },
         };
@@ -210,6 +243,7 @@ export default function LiveTab() {
           display: '--',
           numeric: 0,
           history: prev[widget.id]?.history ?? [],
+          rangeData: prev[widget.id]?.rangeData ?? [],
           loading: false,
           error: err instanceof Error ? err.message : 'Fetch failed',
         },
@@ -414,17 +448,32 @@ export default function LiveTab() {
                 {w.unit && <span className="text-xs text-[var(--color-text-dim)]">{w.unit}</span>}
               </div>
 
-              {/* Sparkline */}
-              {s?.history && s.history.length > 1 && <Spark data={s.history} color={w.color} />}
+              {/* Trend chart: range data (1h) or fallback to history sparkline */}
+              {s?.rangeData && s.rangeData.length > 1 ? (
+                <AreaChart data={s.rangeData} color={w.color} height={48} />
+              ) : s?.history && s.history.length > 1 ? (
+                <Spark data={s.history} color={w.color} />
+              ) : null}
 
               {/* Expanded query details */}
               {isExpanded && s && (
                 <div className="mt-3 pt-3 border-t border-[var(--color-border)] space-y-2 text-[10px]">
                   <div className="text-[var(--color-text-dim)] mb-1">{w.description}</div>
+                  {s.rangeData.length > 0 && (
+                    <div className="text-[var(--color-text-dim)]">
+                      Trend: {s.rangeData.length} data points (WITHIN last 1h)
+                    </div>
+                  )}
                   <div>
                     <span className="text-[var(--color-text-dim)]">UNIQL: </span>
                     <span className="text-[var(--color-accent)] font-mono break-all">{w.uniql}</span>
                   </div>
+                  {w.rangeQuery && (
+                    <div>
+                      <span className="text-[var(--color-text-dim)]">Range: </span>
+                      <span className="text-[var(--color-cyan)] font-mono break-all">{w.rangeQuery}</span>
+                    </div>
+                  )}
                   {s.native && (
                     <div>
                       <span className="text-[var(--color-text-dim)]">Native: </span>
@@ -609,5 +658,62 @@ function Spark({ data, color = 'var(--color-accent)' }: { data: number[]; color?
         <circle cx={w} cy={h - ((data[data.length - 1] - min) / range) * (h - 4) - 2} r="2" fill={color} />
       )}
     </svg>
+  );
+}
+
+// --- Area chart for range data (WITHIN last 1h) ---
+
+function AreaChart({ data, color, height = 48 }: { data: [number, string][]; color: string; height?: number }) {
+  if (data.length < 2) return null;
+
+  const values = data.map(([, v]) => parseFloat(v));
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const w = 220;
+  const h = height;
+  const pad = 2;
+
+  const points = values
+    .map((v, i) => {
+      const x = (i / (values.length - 1)) * w;
+      const y = h - ((v - min) / range) * (h - pad * 2) - pad;
+      return `${x},${y}`;
+    })
+    .join(' ');
+  const fillPoints = `0,${h} ${points} ${w},${h}`;
+  const gradId = `area-grad-${color.replace(/[^a-z0-9]/gi, '')}-${data.length}`;
+
+  // Time labels
+  const firstTs = data[0][0];
+  const lastTs = data[data.length - 1][0];
+  const firstTime = new Date(firstTs * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+  const lastTime = new Date(lastTs * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+  const lastVal = values[values.length - 1];
+
+  return (
+    <div className="mt-2 relative">
+      <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none">
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.25" />
+            <stop offset="100%" stopColor={color} stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+        <polygon points={fillPoints} fill={`url(#${gradId})`} />
+        <polyline points={points} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />
+        <circle
+          cx={w}
+          cy={h - ((lastVal - min) / range) * (h - pad * 2) - pad}
+          r="2.5"
+          fill={color}
+        />
+      </svg>
+      <div className="flex items-center justify-between mt-0.5">
+        <span className="text-[8px] text-[var(--color-text-dim)] font-mono">{firstTime}</span>
+        <span className="text-[8px] font-mono" style={{ color }}>{data.length} pts</span>
+        <span className="text-[8px] text-[var(--color-text-dim)] font-mono">{lastTime}</span>
+      </div>
+    </div>
   );
 }
