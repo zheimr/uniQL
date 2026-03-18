@@ -36,3 +36,4 @@ target/coverage/
 
 # Chat logs
 chat.md
+*.png
