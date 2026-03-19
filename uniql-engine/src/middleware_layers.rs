@@ -91,6 +91,39 @@ pub async fn api_key_auth(
     }
 }
 
+/// Rate limiting middleware — per-IP token bucket.
+pub async fn rate_limit(
+    State(state): State<Arc<AppState>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    // Extract client IP from headers or connection
+    let ip = request.headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .split(',').next().unwrap_or("unknown")
+        .trim()
+        .to_string();
+
+    // Health and metrics endpoints are exempt
+    let path = request.uri().path();
+    if path == "/health" || path == "/metrics" {
+        return next.run(request).await;
+    }
+
+    match state.rate_limiter.check(&ip).await {
+        Ok(_remaining) => next.run(request).await,
+        Err(retry_after_ms) => {
+            let mut resp = (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded").into_response();
+            if let Ok(val) = HeaderValue::from_str(&format!("{}", retry_after_ms / 1000 + 1)) {
+                resp.headers_mut().insert("retry-after", val);
+            }
+            resp
+        }
+    }
+}
+
 /// Catch-all panic handler middleware.
 /// If any downstream handler panics, this returns 500 instead of crashing the server.
 pub async fn panic_recovery(
@@ -141,6 +174,7 @@ mod tests {
             },
             cache: crate::cache::QueryCache::new(100, 15),
             metrics: crate::api::metrics::EngineMetrics::new(),
+            rate_limiter: crate::rate_limit::RateLimiter::new(100),
         })
     }
 

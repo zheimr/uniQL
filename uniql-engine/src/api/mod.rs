@@ -4,6 +4,7 @@ pub mod explain;
 pub mod health;
 pub mod investigate;
 pub mod metrics;
+pub mod schema;
 
 use serde::{Deserialize, Serialize};
 

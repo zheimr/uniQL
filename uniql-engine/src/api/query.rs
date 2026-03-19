@@ -271,7 +271,7 @@ mod tests {
             api_keys: vec![],
             cors_origins: vec![],
         };
-        (Arc::new(AppState { config, cache: crate::cache::QueryCache::new(100, 15), metrics: crate::api::metrics::EngineMetrics::new() }), prom, vlogs)
+        (Arc::new(AppState { config, cache: crate::cache::QueryCache::new(100, 15), metrics: crate::api::metrics::EngineMetrics::new(), rate_limiter: crate::rate_limit::RateLimiter::new(100) }), prom, vlogs)
     }
 
     #[tokio::test]
@@ -397,7 +397,7 @@ mod tests {
             api_keys: vec![],
             cors_origins: vec![],
         };
-        let state = Arc::new(AppState { config, cache: crate::cache::QueryCache::new(100, 15), metrics: crate::api::metrics::EngineMetrics::new() });
+        let state = Arc::new(AppState { config, cache: crate::cache::QueryCache::new(100, 15), metrics: crate::api::metrics::EngineMetrics::new(), rate_limiter: crate::rate_limit::RateLimiter::new(100) });
         let req = QueryRequest { query: "FROM metrics WHERE __name__ = \"up\" WITHIN last 1h".to_string(), format: "json".to_string(), limit: 100 };
         let result = handle_query(State(state), Json(req)).await;
         assert!(result.is_ok());

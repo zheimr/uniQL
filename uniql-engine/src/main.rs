@@ -8,6 +8,7 @@ mod format;
 mod middleware_layers;
 mod normalize_result;
 mod planner;
+mod rate_limit;
 
 use axum::{extract::DefaultBodyLimit, http::StatusCode, middleware, routing::{get, post}, Router};
 use std::sync::Arc;
@@ -75,7 +76,10 @@ async fn main() {
     let metrics = api::metrics::EngineMetrics::new();
     tracing::info!("Query cache: 1000 entries, 15s TTL");
 
-    let state = Arc::new(engine::AppState { config, cache, metrics });
+    let rate_limiter = rate_limit::RateLimiter::new(100); // 100 req/s per IP
+    tracing::info!("Rate limiter: 100 req/s per IP");
+
+    let state = Arc::new(engine::AppState { config, cache, metrics, rate_limiter });
 
     // Routes — layers applied bottom-up: last added = outermost
     let app = Router::new()
@@ -85,10 +89,12 @@ async fn main() {
         .route("/v1/investigate", post(api::investigate::handle_investigate))
         .route("/health", get(api::health::handle_health))
         .route("/metrics", get(api::metrics::handle_metrics))
+        .route("/v1/schema", get(api::schema::handle_schema))
         .layer(DefaultBodyLimit::max(256 * 1024)) // 256KB body limit
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(60)))
+        .layer(middleware::from_fn_with_state(state.clone(), middleware_layers::rate_limit))
         .layer(middleware::from_fn_with_state(state.clone(), middleware_layers::api_key_auth))
         .layer(middleware::from_fn(middleware_layers::query_audit_log))
         .layer(middleware::from_fn(middleware_layers::request_id))

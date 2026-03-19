@@ -84,6 +84,7 @@ mod tests {
             config: EngineConfig::default(),
             cache: QueryCache::new(100, 15),
             metrics: EngineMetrics::new(),
+            rate_limiter: crate::rate_limit::RateLimiter::new(100),
         })
     }
 

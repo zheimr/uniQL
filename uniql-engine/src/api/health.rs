@@ -81,7 +81,7 @@ mod tests {
             api_keys: vec![],
             cors_origins: vec![],
         };
-        let state = Arc::new(AppState { config, cache: crate::cache::QueryCache::new(100, 15), metrics: crate::api::metrics::EngineMetrics::new() });
+        let state = Arc::new(AppState { config, cache: crate::cache::QueryCache::new(100, 15), metrics: crate::api::metrics::EngineMetrics::new(), rate_limiter: crate::rate_limit::RateLimiter::new(100) });
         let Json(resp) = handle_health(State(state)).await;
         assert_eq!(resp.status, "ok");
         assert_eq!(resp.version, "0.3.0");
@@ -103,7 +103,7 @@ mod tests {
             api_keys: vec![],
             cors_origins: vec![],
         };
-        let state = Arc::new(AppState { config, cache: crate::cache::QueryCache::new(100, 15), metrics: crate::api::metrics::EngineMetrics::new() });
+        let state = Arc::new(AppState { config, cache: crate::cache::QueryCache::new(100, 15), metrics: crate::api::metrics::EngineMetrics::new(), rate_limiter: crate::rate_limit::RateLimiter::new(100) });
         let Json(resp) = handle_health(State(state)).await;
         assert_eq!(resp.status, "degraded");
         let vm = resp.backends.iter().find(|b| b.name == "vm").unwrap();
@@ -120,7 +120,7 @@ mod tests {
             api_keys: vec![],
             cors_origins: vec![],
         };
-        let state = Arc::new(AppState { config, cache: crate::cache::QueryCache::new(100, 15), metrics: crate::api::metrics::EngineMetrics::new() });
+        let state = Arc::new(AppState { config, cache: crate::cache::QueryCache::new(100, 15), metrics: crate::api::metrics::EngineMetrics::new(), rate_limiter: crate::rate_limit::RateLimiter::new(100) });
         let Json(resp) = handle_health(State(state)).await;
         assert_eq!(resp.status, "ok"); // no backends = vacuously true
         assert_eq!(resp.backends.len(), 0);
@@ -136,7 +136,7 @@ mod tests {
             api_keys: vec![],
             cors_origins: vec![],
         };
-        let state = Arc::new(AppState { config, cache: crate::cache::QueryCache::new(100, 15), metrics: crate::api::metrics::EngineMetrics::new() });
+        let state = Arc::new(AppState { config, cache: crate::cache::QueryCache::new(100, 15), metrics: crate::api::metrics::EngineMetrics::new(), rate_limiter: crate::rate_limit::RateLimiter::new(100) });
         let Json(resp) = handle_health(State(state)).await;
         assert_eq!(resp.status, "degraded");
         assert_eq!(resp.backends[0].status, "unreachable");
