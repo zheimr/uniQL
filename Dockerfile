@@ -4,6 +4,7 @@ COPY Cargo.toml ./
 COPY uniql-core ./uniql-core
 COPY uniql-engine ./uniql-engine
 COPY uniql-wasm ./uniql-wasm
+COPY benchmarks ./benchmarks
 RUN cargo build --release -p uniql-engine
 
 FROM debian:bookworm-slim
