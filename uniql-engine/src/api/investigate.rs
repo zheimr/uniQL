@@ -286,9 +286,9 @@ mod tests {
     #[test]
     fn substitute_special_chars_in_value() {
         let mut params = HashMap::new();
-        params.insert("host".to_string(), "srv-01.kocaeli.bel.tr".to_string());
+        params.insert("host".to_string(), "srv-01.example.com".to_string());
         let result = substitute_params("host = \"$host\"", &params);
-        assert!(result.contains("srv-01.kocaeli.bel.tr"));
+        assert!(result.contains("srv-01.example.com"));
     }
 
     // ─── Injection prevention ─────────────────────────────────────────
@@ -324,14 +324,14 @@ mod tests {
 
     #[test]
     fn sanitize_normal_value_unchanged() {
-        let result = sanitize_param_value("r750g01.kocaeli.bel.tr");
-        assert_eq!(result, "r750g01.kocaeli.bel.tr");
+        let result = sanitize_param_value("esxi-node01.example.com");
+        assert_eq!(result, "esxi-node01.example.com");
     }
 
     #[test]
     fn sanitize_allows_safe_chars() {
         assert_eq!(sanitize_param_value("host-01_prod"), "host-01_prod");
-        assert_eq!(sanitize_param_value("10.100.8.87:9090"), "10.100.8.87:9090");
+        assert_eq!(sanitize_param_value("10.0.1.50:9090"), "10.0.1.50:9090");
         assert_eq!(sanitize_param_value("/api/v1"), "/api/v1");
     }
 

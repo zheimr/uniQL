@@ -12,8 +12,8 @@ mod corpus;
 use std::time::Instant;
 
 const ENGINE_URL: &str = "http://localhost:9090";
-const VM_URL: &str = "http://10.201.2.5:8428";
-const VL_URL: &str = "http://10.201.2.17:9428";
+const VM_URL: &str = "http://10.0.1.100:8428";
+const VL_URL: &str = "http://10.0.1.101:9428";
 
 #[derive(Debug)]
 #[allow(dead_code)]

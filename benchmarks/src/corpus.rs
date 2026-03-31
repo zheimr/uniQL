@@ -160,7 +160,7 @@ pub fn corpus() -> Vec<BenchQuery> {
         BenchQuery {
             id: "r09_vsphere_cpu",
             tier: Tier::Realistic,
-            query: r#"FROM metrics WHERE __name__ = "vsphere_host_cpu_usage_average" AND clustername = "DELLR750_Cluster" WITHIN last 1h"#,
+            query: r#"FROM metrics WHERE __name__ = "vsphere_host_cpu_usage_average" AND clustername = "Production_Cluster" WITHIN last 1h"#,
             expected_backend: "promql",
             description: "vSphere host CPU by cluster — AETHERIS SYS scenario",
         },
@@ -228,7 +228,7 @@ pub fn corpus() -> Vec<BenchQuery> {
         BenchQuery {
             id: "x05_show_timeseries",
             tier: Tier::Stress,
-            query: r#"SHOW timeseries FROM victoria WHERE __name__ = "vsphere_host_cpu_usage_average" AND clustername = "DELLR750_Cluster" WITHIN last 24h"#,
+            query: r#"SHOW timeseries FROM victoria WHERE __name__ = "vsphere_host_cpu_usage_average" AND clustername = "Production_Cluster" WITHIN last 24h"#,
             expected_backend: "promql",
             description: "SHOW format with complex filter and long range",
         },

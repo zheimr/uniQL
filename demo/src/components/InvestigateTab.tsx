@@ -5,7 +5,7 @@ import { investigationSteps } from '../data/scenarios';
 const ENGINE_URL = `http://${window.location.hostname}:9090`;
 
 const packs = [
-  { id: 'high_cpu', label: 'High CPU', icon: '🔥', desc: 'ESXi host CPU trend + VM CPU + memory', defaultHost: 'r750g01.kocaeli.bel.tr', color: '#d29922' },
+  { id: 'high_cpu', label: 'High CPU', icon: '🔥', desc: 'ESXi host CPU trend + VM CPU + memory', defaultHost: 'esxi-node01.example.com', color: '#d29922' },
   { id: 'link_down', label: 'Link Down', icon: '🔌', desc: 'Device status + interface + firewall logs', defaultHost: 'CORE-SW-01', color: '#f85149' },
   { id: 'error_spike', label: 'Error Spike', icon: '📈', desc: 'SOC events + error logs + API errors', defaultHost: '', defaultService: 'admin-api', color: '#7c5cfc' },
   { id: 'latency_degradation', label: 'Latency', icon: '🐌', desc: 'API latency + request rate + slow logs', defaultHost: '', defaultService: 'admin-api', color: '#39d0d8' },
@@ -254,7 +254,7 @@ function AnalysisReport({ results, packId, param }: { results: PackResult[]; pac
       <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden">
         <div className="px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-surface-3)]">
           <div className="text-xs font-bold text-[var(--color-text-bright)]">Analysis: {param}</div>
-          <div className="text-[10px] text-[var(--color-text-dim)]">DELLR750_Cluster — {cpuData.length} CPU cores, {vms.length} VMs</div>
+          <div className="text-[10px] text-[var(--color-text-dim)]">Production_Cluster — {cpuData.length} CPU cores, {vms.length} VMs</div>
         </div>
         <div className="p-4 space-y-4">
           {/* CPU Overview */}

@@ -88,7 +88,7 @@ export default function OverviewTab({ engine, wasm, transpile, setTab }: Props) 
   useEffect(() => { setTimeout(runBenchmark, 500); }, []);
 
   // Transpile demo
-  const demoQuery = 'FROM metrics WHERE __name__ = "vsphere_host_cpu_usage_average" AND clustername = "DELLR750_Cluster" WITHIN last 1h';
+  const demoQuery = 'FROM metrics WHERE __name__ = "vsphere_host_cpu_usage_average" AND clustername = "Production_Cluster" WITHIN last 1h';
   const promql = wasm ? transpile(demoQuery, 'promql') : null;
   const logql = wasm ? transpile(demoQuery, 'logql') : null;
   const logsql = wasm ? transpile(demoQuery, 'logsql') : null;
@@ -222,7 +222,7 @@ export default function OverviewTab({ engine, wasm, transpile, setTab }: Props) 
           <div className="p-4 border-b border-[var(--color-border)] bg-[var(--color-surface-3)]">
             <div className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wider mb-1">UniQL Input</div>
             <div className="font-mono text-[13px]">
-              <span className="text-[var(--color-accent)]">FROM</span> <span className="text-[var(--color-text)]">metrics</span> <span className="text-[var(--color-accent)]">WHERE</span> <span className="text-[var(--color-text)]">__name__ =</span> <span className="text-[var(--color-green)]">"vsphere_host_cpu_usage_average"</span> <span className="text-[var(--color-accent)]">AND</span> <span className="text-[var(--color-text)]">clustername =</span> <span className="text-[var(--color-green)]">"DELLR750_Cluster"</span> <span className="text-[var(--color-accent)]">WITHIN</span> <span className="text-[var(--color-amber)]">last 1h</span>
+              <span className="text-[var(--color-accent)]">FROM</span> <span className="text-[var(--color-text)]">metrics</span> <span className="text-[var(--color-accent)]">WHERE</span> <span className="text-[var(--color-text)]">__name__ =</span> <span className="text-[var(--color-green)]">"vsphere_host_cpu_usage_average"</span> <span className="text-[var(--color-accent)]">AND</span> <span className="text-[var(--color-text)]">clustername =</span> <span className="text-[var(--color-green)]">"Production_Cluster"</span> <span className="text-[var(--color-accent)]">WITHIN</span> <span className="text-[var(--color-amber)]">last 1h</span>
             </div>
           </div>
           <div className="grid grid-cols-3 divide-x divide-[var(--color-border)]">

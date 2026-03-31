@@ -319,7 +319,7 @@ function ApiRef() {
       />
       <Code>{`curl -X POST http://localhost:9090/v1/investigate \\
   -H "Content-Type: application/json" \\
-  -d '{"pack": "high_cpu", "params": {"host": "r750g01.kocaeli.bel.tr"}}'
+  -d '{"pack": "high_cpu", "params": {"host": "esxi-node01.example.com"}}'
 
 # Response:
 { "status": "success", "pack": "high_cpu", "total_time_ms": 7,
@@ -443,7 +443,7 @@ SHOW timeseries FROM victoria WHERE __name__ = "snmpv2_device_up"
 
 -- ESXi host CPU by cluster
 FROM metrics WHERE __name__ = "vsphere_host_cpu_usage_average"
-  AND clustername = "DELLR750_Cluster" WITHIN last 1h
+  AND clustername = "Production_Cluster" WITHIN last 1h
 
 -- VM memory usage
 SHOW timeseries FROM victoria WHERE __name__ = "vsphere_vm_mem_usage_average"`}</Code>
@@ -452,7 +452,7 @@ SHOW timeseries FROM victoria WHERE __name__ = "vsphere_vm_mem_usage_average"`}<
       <Code>{`# High CPU investigation (3 parallel queries)
 curl -X POST http://localhost:9090/v1/investigate \\
   -H "Content-Type: application/json" \\
-  -d '{"pack": "high_cpu", "params": {"host": "r750g01.kocaeli.bel.tr"}}'
+  -d '{"pack": "high_cpu", "params": {"host": "esxi-node01.example.com"}}'
 
 # Link down investigation
 curl -X POST http://localhost:9090/v1/investigate \\

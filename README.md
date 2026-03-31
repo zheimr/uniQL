@@ -4,7 +4,7 @@ Unified observability query language. Single syntax for metrics, logs, and trace
 
 ```
 FROM metrics WHERE __name__ = "vsphere_host_cpu_usage_average"
-  AND clustername = "DELLR750_Cluster"
+  AND clustername = "Production_Cluster"
 WITHIN last 1h
 COMPUTE avg(value) GROUP BY esxhostname
 ```
@@ -63,7 +63,7 @@ curl -X POST http://localhost:9090/v1/explain \
 # Investigate (parallel 3-query pack)
 curl -X POST http://localhost:9090/v1/investigate \
   -H "Content-Type: application/json" \
-  -d '{"pack": "high_cpu", "params": {"host": "r750g01.kocaeli.bel.tr"}}'
+  -d '{"pack": "high_cpu", "params": {"host": "esxi-node01.example.com"}}'
 ```
 
 ## Language Reference
@@ -150,7 +150,7 @@ CORRELATE ON host WITHIN 60s
 
 ```sql
 DEFINE high_cpu = __name__ = "vsphere_host_cpu_usage_average"
-FROM metrics WHERE high_cpu AND clustername = "DELLR750_Cluster"
+FROM metrics WHERE high_cpu AND clustername = "Production_Cluster"
 ```
 
 ### NATIVE — Backend Passthrough

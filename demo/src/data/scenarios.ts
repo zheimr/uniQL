@@ -201,7 +201,7 @@ WITHIN 60s`,
     category: 'advanced',
     query: `DEFINE high_cpu = __name__ = "vsphere_host_cpu_usage_average"
 FROM metrics WHERE high_cpu
-  AND clustername = "DELLR750_Cluster"`,
+  AND clustername = "Production_Cluster"`,
     description: 'Reusable macro — DEFINE/USE pattern',
     backend: 'promql',
   },
@@ -223,7 +223,7 @@ FROM metrics WHERE high_cpu
     category: 'advanced',
     query: `SHOW timeseries FROM victoria
 WHERE __name__ = "vsphere_host_cpu_usage_average"
-  AND clustername = "DELLR750_Cluster"
+  AND clustername = "Production_Cluster"
 WITHIN last 1h`,
     description: 'SHOW + FROM + WHERE + WITHIN — full clause chain',
     backend: 'promql',
@@ -236,7 +236,7 @@ export const investigationSteps = [
     title: 'Alert Triggered',
     icon: '🔴',
     description: 'ESXi host CPU > 85% — AETHERIS vmalert rule',
-    detail: 'vmalert detected: vsphere_host_cpu_usage_average > 85 for 5 minutes. Host: r750g01.kocaeli.bel.tr, Cluster: DELLR750_Cluster.',
+    detail: 'vmalert detected: vsphere_host_cpu_usage_average > 85 for 5 minutes. Host: esxi-node01.example.com, Cluster: Production_Cluster.',
     query: `SHOW timeseries FROM victoria WHERE __name__ = "vsphere_host_cpu_usage_average"`,
   },
   {
@@ -252,7 +252,7 @@ export const investigationSteps = [
     title: 'Parallel Queries Complete',
     icon: '⚡',
     description: 'CPU trend | Top VMs | Memory correlation',
-    detail: 'Query 1: vsphere_host_cpu → spike at 14:32, 92% peak\nQuery 2: vsphere_vm_cpu top 5 → Gunes_Test_Linux highest\nQuery 3: vsphere_host_mem → 67%, normal range',
+    detail: 'Query 1: vsphere_host_cpu → spike at 14:32, 92% peak\nQuery 2: vsphere_vm_cpu top 5 → test-vm-01 highest\nQuery 3: vsphere_host_mem → 67%, normal range',
     query: `SHOW timeseries FROM victoria WHERE __name__ = "vsphere_vm_cpu_usage_average"`,
   },
   {
@@ -260,15 +260,15 @@ export const investigationSteps = [
     title: 'Correlation Analysis',
     icon: '🧩',
     description: 'Host + VM + time window match found',
-    detail: 'CORRELATE ON host WITHIN 60s: Host CPU spike (14:32, 92%) + VM "Gunes_Test_Linux" CPU (14:31, 100%) on same host, same time window. VM caused the host spike.',
+    detail: 'CORRELATE ON host WITHIN 60s: Host CPU spike (14:32, 92%) + VM "test-vm-01" CPU (14:31, 100%) on same host, same time window. VM caused the host spike.',
     query: null,
   },
   {
     id: 5,
     title: 'Root Cause Identified',
     icon: '✅',
-    description: 'Gunes_Test_Linux VM — CPU runaway, started at 14:31',
-    detail: 'Root Cause: Gunes_Test_Linux VM on r750g01.kocaeli.bel.tr reached 100% CPU at 14:31, causing host-level CPU spike. Recommended action: VM CPU limit or rightsizing.',
+    description: 'test-vm-01 VM — CPU runaway, started at 14:31',
+    detail: 'Root Cause: test-vm-01 VM on esxi-node01.example.com reached 100% CPU at 14:31, causing host-level CPU spike. Recommended action: VM CPU limit or rightsizing.',
     query: null,
   },
 ];
