@@ -37,3 +37,12 @@ target/coverage/
 # Chat logs
 chat.md
 *.png
+
+# Claude AI
+CLAUDE.md
+.claude/
+
+# Internal docs
+COMPETITIVE_STRATEGY.md
+LAYER_ARCHITECTURE_RESEARCH.md
+UNIQL_baseline.md

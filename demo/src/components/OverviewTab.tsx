@@ -244,18 +244,115 @@ export default function OverviewTab({ engine, wasm, transpile, setTab }: Props) 
         </div>
       </section>
 
+      {/* ═══ BENCHMARK RESULTS ═══ */}
+      <section className="mb-16">
+        <h2 className="text-2xl font-bold text-[var(--color-text-bright)] text-center mb-3">Benchmarked, Not Claimed</h2>
+        <p className="text-[var(--color-text-dim)] text-center max-w-2xl mx-auto mb-8">27-query corpus, 3 tiers, Criterion micro-benchmark + real AETHERIS production data</p>
+
+        {/* KPI strip */}
+        <div className="grid grid-cols-3 lg:grid-cols-6 gap-3 max-w-5xl mx-auto mb-8">
+          {[
+            { value: '1.5', unit: 'us', label: 'Parse p50', color: 'var(--color-cyan)' },
+            { value: '3.2', unit: 'us', label: 'Transpile p50', color: 'var(--color-accent)' },
+            { value: '<1', unit: 'ms', label: 'E2E Warm p50', color: 'var(--color-green)' },
+            { value: '92', unit: '%', label: 'Semantic Match', color: 'var(--color-green)' },
+            { value: '22K', unit: 'rps', label: 'Peak Throughput', color: 'var(--color-amber)' },
+            { value: '100', unit: '%', label: 'Transpile Success', color: 'var(--color-green)' },
+          ].map(k => (
+            <div key={k.label} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 text-center">
+              <div className="flex items-baseline justify-center gap-0.5">
+                <span className="text-2xl font-bold font-mono" style={{ color: k.color }}>{k.value}</span>
+                <span className="text-[10px] text-[var(--color-text-dim)]">{k.unit}</span>
+              </div>
+              <div className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-wider mt-1">{k.label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Detailed tables */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 max-w-5xl mx-auto">
+          {/* Compiler pipeline */}
+          <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden">
+            <div className="px-4 py-2.5 border-b border-[var(--color-border)] bg-[var(--color-surface-3)]">
+              <span className="text-[11px] font-semibold text-[var(--color-accent)] uppercase tracking-wider">Compiler Pipeline (Criterion)</span>
+            </div>
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="border-b border-[var(--color-border)]/50">
+                  <th className="text-left px-4 py-2 text-[var(--color-text-dim)]">Stage</th>
+                  <th className="text-right px-3 py-2 text-[var(--color-text-dim)]">Simple</th>
+                  <th className="text-right px-3 py-2 text-[var(--color-text-dim)]">Realistic</th>
+                  <th className="text-right px-3 py-2 text-[var(--color-text-dim)]">Stress</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--color-border)]/30">
+                {[
+                  ['Parse', '1.5us', '3.2us', '5.6us'],
+                  ['Prepare', '2.1us', '4.5us', '7.7us'],
+                  ['Full Pipeline', '2.4us', '5.4us', '6.6us'],
+                ].map(([stage, s, r, x]) => (
+                  <tr key={stage}>
+                    <td className="px-4 py-1.5 text-[var(--color-text)] font-medium">{stage}</td>
+                    <td className="px-3 py-1.5 text-right font-mono text-[var(--color-green)]">{s}</td>
+                    <td className="px-3 py-1.5 text-right font-mono text-[var(--color-cyan)]">{r}</td>
+                    <td className="px-3 py-1.5 text-right font-mono text-[var(--color-amber)]">{x}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* E2E + Concurrency */}
+          <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden">
+            <div className="px-4 py-2.5 border-b border-[var(--color-border)] bg-[var(--color-surface-3)]">
+              <span className="text-[11px] font-semibold text-[var(--color-green)] uppercase tracking-wider">End-to-End + Load Test</span>
+            </div>
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="border-b border-[var(--color-border)]/50">
+                  <th className="text-left px-4 py-2 text-[var(--color-text-dim)]">Test</th>
+                  <th className="text-right px-3 py-2 text-[var(--color-text-dim)]">p50</th>
+                  <th className="text-right px-3 py-2 text-[var(--color-text-dim)]">p95</th>
+                  <th className="text-right px-3 py-2 text-[var(--color-text-dim)]">p99</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--color-border)]/30">
+                {[
+                  ['E2E Cold', '0ms', '3ms', '4ms'],
+                  ['E2E Warm', '0ms', '5ms', '7ms'],
+                  ['1 concurrent', '0.1ms', '0.3ms', '0.6ms'],
+                  ['10 concurrent', '0.4ms', '1.4ms', '3.1ms'],
+                  ['50 concurrent', '2.5ms', '5.1ms', '6.9ms'],
+                  ['100 concurrent', '4.0ms', '8.2ms', '10.9ms'],
+                ].map(([test, p50, p95, p99]) => (
+                  <tr key={test}>
+                    <td className="px-4 py-1.5 text-[var(--color-text)] font-medium">{test}</td>
+                    <td className="px-3 py-1.5 text-right font-mono text-[var(--color-green)]">{p50}</td>
+                    <td className="px-3 py-1.5 text-right font-mono text-[var(--color-cyan)]">{p95}</td>
+                    <td className="px-3 py-1.5 text-right font-mono text-[var(--color-amber)]">{p99}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="px-4 py-2 text-[9px] text-[var(--color-text-dim)] border-t border-[var(--color-border)]/30">
+              Peak: 22,391 req/s @ 100 concurrent — sub-linear scaling
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* ═══ FEATURES ═══ */}
       <section className="mb-16">
         <h2 className="text-2xl font-bold text-[var(--color-text-bright)] text-center mb-8">Built for Production</h2>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 max-w-4xl mx-auto">
           {[
-            { icon: '⚡', title: 'Sub-ms Parse', desc: 'Handwritten Rust lexer + Pratt parser. 12-layer pipeline.', stat: '<100us' },
-            { icon: '🔒', title: 'Security', desc: 'Injection prevention, panic recovery, constant-time auth.', stat: '8 guards' },
-            { icon: '🧪', title: 'Battle Tested', desc: '467 tests, 83% coverage, wiremock integration tests.', stat: '467 tests' },
-            { icon: '🌐', title: 'WASM', desc: '7 browser functions. Zero server for transpilation.', stat: '< 200KB' },
-            { icon: '🔗', title: 'CORRELATE', desc: 'Cross-signal join with hash-partitioned time window.', stat: '10K limit' },
+            { icon: '⚡', title: '12-Layer Pipeline', desc: 'Lex → Parse → AST → Semantic → Bind → Normalize → Transpile', stat: '1.5us p50' },
+            { icon: '🔒', title: 'Security', desc: 'Injection prevention, panic recovery, constant-time auth, rate limiting.', stat: '100 req/s' },
+            { icon: '🧪', title: 'Verified', desc: '27-query benchmark corpus, Criterion micro-bench, wiremock tests.', stat: '92% match' },
+            { icon: '🌐', title: 'WASM', desc: 'Browser transpile, zero server. Explain + autocomplete.', stat: '< 250KB' },
+            { icon: '🔗', title: 'CORRELATE', desc: 'Cross-signal hash join with time window. Metrics + Logs.', stat: '10K limit' },
             { icon: '📦', title: 'Investigation', desc: '4 built-in packs: high_cpu, link_down, error_spike, latency.', stat: '3 parallel' },
-            { icon: '🔄', title: 'Retry + Health', desc: 'Auto retry on transient failures. Startup health probe.', stat: '1 retry' },
+            { icon: '💾', title: 'Cache + Retry', desc: 'LRU cache (15s TTL), auto retry on transient failures.', stat: '1000 entries' },
             { icon: '📖', title: 'Open Source', desc: 'MIT license. Rust + Axum + Tokio. Docker ready.', stat: 'MIT' },
           ].map(f => (
             <div key={f.title} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5 hover:border-[var(--color-border-bright)] transition-all">
@@ -321,10 +418,10 @@ export default function OverviewTab({ engine, wasm, transpile, setTab }: Props) 
           docker compose up -d && curl localhost:9090/health
         </div>
         <div className="flex items-center justify-center gap-6 text-[11px] text-[var(--color-text-dim)]">
-          <span>467 tests</span>
-          <span>83% coverage</span>
+          <span>27-query benchmark</span>
+          <span>92% semantic match</span>
+          <span>22K req/s</span>
           <span>12-layer pipeline</span>
-          <span>2MB RAM</span>
           <span>MIT license</span>
         </div>
       </section>

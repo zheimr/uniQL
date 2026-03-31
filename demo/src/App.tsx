@@ -6,8 +6,9 @@ import OverviewTab from './components/OverviewTab';
 import LiveTab from './components/LiveTab';
 import TranspileTab from './components/TranspileTab';
 import InvestigateTab from './components/InvestigateTab';
+import DocsTab from './components/DocsTab';
 
-export type TabId = 'overview' | 'live' | 'transpile' | 'investigate';
+export type TabId = 'overview' | 'live' | 'transpile' | 'investigate' | 'docs';
 
 const ENGINE_URL = `http://${window.location.hostname}:9090`;
 
@@ -48,6 +49,7 @@ export default function App() {
         {tab === 'live' && <LiveTab />}
         {tab === 'transpile' && <TranspileTab wasm={wasm} wasmLoading={wasmLoading} transpile={transpile} />}
         {tab === 'investigate' && <InvestigateTab engine={engine} />}
+        {tab === 'docs' && <DocsTab />}
       </main>
     </div>
   );

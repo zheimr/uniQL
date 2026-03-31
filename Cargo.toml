@@ -3,5 +3,6 @@ members = [
     "uniql-core",
     "uniql-engine",
     "uniql-wasm",
+    "benchmarks",
 ]
 resolver = "2"

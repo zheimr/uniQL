@@ -1,0 +1,31 @@
+[package]
+name = "uniql-benchmarks"
+version = "0.3.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+uniql-core = { path = "../uniql-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "compiler"
+harness = false
+
+[[bin]]
+name = "accuracy"
+path = "src/accuracy.rs"
+
+[[bin]]
+name = "e2e"
+path = "src/e2e.rs"
+
+[[bin]]
+name = "loadtest"
+path = "src/loadtest.rs"
