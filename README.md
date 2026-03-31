@@ -1,5 +1,7 @@
 # UniQL — Write Once, Query Everything
 
+**[Live Playground](https://zheimr.github.io/uniQL/)** | [Documentation](#language-reference) | [API](#api)
+
 Unified observability query language. Single syntax for metrics, logs, and traces across multiple backends.
 
 ```
