@@ -3,7 +3,6 @@
 /// Measures full request lifecycle: HTTP → parse → transpile → execute → normalize → respond
 /// Both cold path (first query) and warm path (cached)
 /// Reports: p50, p95, p99 for each tier
-
 mod corpus;
 
 use std::time::Instant;
@@ -12,6 +11,7 @@ const ENGINE_URL: &str = "http://localhost:9090";
 const ITERATIONS: usize = 20;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct E2EResult {
     id: String,
     tier: String,
@@ -34,15 +34,23 @@ async fn main() {
     println!("║  UNIQL END-TO-END BENCHMARK                                   ║");
     println!("╚══════════════════════════════════════════════════════════════════╝");
     println!();
-    println!("  Corpus: {} queries, {} iterations per query", queries.len(), ITERATIONS);
+    println!(
+        "  Corpus: {} queries, {} iterations per query",
+        queries.len(),
+        ITERATIONS
+    );
     println!("  Engine: {ENGINE_URL}");
     println!();
 
     // Health check
     let health: serde_json::Value = client
         .get(format!("{}/health", ENGINE_URL))
-        .send().await.expect("Engine unreachable")
-        .json().await.unwrap();
+        .send()
+        .await
+        .expect("Engine unreachable")
+        .json()
+        .await
+        .unwrap();
     println!("  Engine: {} v{}", health["status"], health["version"]);
     println!();
 
@@ -51,16 +59,21 @@ async fn main() {
     for q in &queries {
         // Cold path: first query (cache miss)
         let cold_start = Instant::now();
-        let cold_resp = client.post(format!("{}/v1/query", ENGINE_URL))
+        let cold_resp = client
+            .post(format!("{}/v1/query", ENGINE_URL))
             .json(&serde_json::json!({"query": q.query, "limit": 10}))
-            .send().await;
+            .send()
+            .await;
         let cold_ms = cold_start.elapsed().as_millis() as u64;
 
         let (status, native_query) = match cold_resp {
             Ok(resp) => {
                 let data: serde_json::Value = resp.json().await.unwrap_or_default();
                 let s = data["status"].as_str().unwrap_or("error").to_string();
-                let nq = data["metadata"]["native_query"].as_str().unwrap_or("").to_string();
+                let nq = data["metadata"]["native_query"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
                 (s, nq)
             }
             Err(e) => (format!("error: {}", e), String::new()),
@@ -70,9 +83,11 @@ async fn main() {
         let mut warm_latencies = Vec::new();
         for _ in 0..ITERATIONS {
             let start = Instant::now();
-            let _ = client.post(format!("{}/v1/query", ENGINE_URL))
+            let _ = client
+                .post(format!("{}/v1/query", ENGINE_URL))
                 .json(&serde_json::json!({"query": q.query, "limit": 10}))
-                .send().await;
+                .send()
+                .await;
             warm_latencies.push(start.elapsed().as_millis() as u64);
         }
 
@@ -80,10 +95,16 @@ async fn main() {
         let warm_p95 = percentile(&warm_latencies, 95);
         let warm_p99 = percentile(&warm_latencies, 99);
 
-        let status_icon = if status == "success" { "\x1b[32m✓\x1b[0m" } else { "\x1b[31m✗\x1b[0m" };
+        let status_icon = if status == "success" {
+            "\x1b[32m✓\x1b[0m"
+        } else {
+            "\x1b[31m✗\x1b[0m"
+        };
 
-        println!("  {} {:25} cold={:>4}ms  warm p50={:>4}ms p95={:>4}ms p99={:>4}ms  [{}]",
-            status_icon, q.id, cold_ms, warm_p50, warm_p95, warm_p99, q.tier);
+        println!(
+            "  {} {:25} cold={:>4}ms  warm p50={:>4}ms p95={:>4}ms p99={:>4}ms  [{}]",
+            status_icon, q.id, cold_ms, warm_p50, warm_p95, warm_p99, q.tier
+        );
 
         results.push(E2EResult {
             id: q.id.to_string(),
@@ -105,39 +126,63 @@ async fn main() {
     let success: Vec<_> = results.iter().filter(|r| r.status == "success").collect();
     let total = results.len();
 
-    println!("  Success rate: {}/{} ({:.1}%)", success.len(), total, success.len() as f64 / total as f64 * 100.0);
+    println!(
+        "  Success rate: {}/{} ({:.1}%)",
+        success.len(),
+        total,
+        success.len() as f64 / total as f64 * 100.0
+    );
     println!();
 
     // Cold path stats
     let cold: Vec<u64> = success.iter().map(|r| r.cold_ms).collect();
     if !cold.is_empty() {
         println!("  Cold path (first query, cache miss):");
-        println!("    p50={:>4}ms  p95={:>4}ms  p99={:>4}ms  min={:>4}ms  max={:>4}ms",
-            percentile(&cold, 50), percentile(&cold, 95), percentile(&cold, 99),
-            cold.iter().min().unwrap(), cold.iter().max().unwrap(),
+        println!(
+            "    p50={:>4}ms  p95={:>4}ms  p99={:>4}ms  min={:>4}ms  max={:>4}ms",
+            percentile(&cold, 50),
+            percentile(&cold, 95),
+            percentile(&cold, 99),
+            cold.iter().min().unwrap(),
+            cold.iter().max().unwrap(),
         );
     }
 
     // Warm path stats
-    let warm: Vec<u64> = success.iter().flat_map(|r| r.warm_latencies_ms.iter().copied()).collect();
+    let warm: Vec<u64> = success
+        .iter()
+        .flat_map(|r| r.warm_latencies_ms.iter().copied())
+        .collect();
     if !warm.is_empty() {
         println!("  Warm path (cached, steady state):");
-        println!("    p50={:>4}ms  p95={:>4}ms  p99={:>4}ms  min={:>4}ms  max={:>4}ms",
-            percentile(&warm, 50), percentile(&warm, 95), percentile(&warm, 99),
-            warm.iter().min().unwrap(), warm.iter().max().unwrap(),
+        println!(
+            "    p50={:>4}ms  p95={:>4}ms  p99={:>4}ms  min={:>4}ms  max={:>4}ms",
+            percentile(&warm, 50),
+            percentile(&warm, 95),
+            percentile(&warm, 99),
+            warm.iter().min().unwrap(),
+            warm.iter().max().unwrap(),
         );
     }
 
     // Per-tier summary
     println!();
     for tier in ["simple", "realistic", "stress"] {
-        let tier_warm: Vec<u64> = success.iter()
+        let tier_warm: Vec<u64> = success
+            .iter()
             .filter(|r| r.tier == tier)
             .flat_map(|r| r.warm_latencies_ms.iter().copied())
             .collect();
-        if tier_warm.is_empty() { continue; }
-        println!("  {:10}  warm p50={:>4}ms  p95={:>4}ms  p99={:>4}ms",
-            tier.to_uppercase(), percentile(&tier_warm, 50), percentile(&tier_warm, 95), percentile(&tier_warm, 99));
+        if tier_warm.is_empty() {
+            continue;
+        }
+        println!(
+            "  {:10}  warm p50={:>4}ms  p95={:>4}ms  p99={:>4}ms",
+            tier.to_uppercase(),
+            percentile(&tier_warm, 50),
+            percentile(&tier_warm, 95),
+            percentile(&tier_warm, 99)
+        );
     }
 
     // Cache effectiveness
@@ -153,7 +198,9 @@ async fn main() {
 }
 
 fn percentile(data: &[u64], pct: u32) -> u64 {
-    if data.is_empty() { return 0; }
+    if data.is_empty() {
+        return 0;
+    }
     let mut sorted = data.to_vec();
     sorted.sort();
     let idx = ((pct as f64 / 100.0) * (sorted.len() - 1) as f64).round() as usize;

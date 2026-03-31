@@ -4,20 +4,17 @@
 //! - API key authentication (x-api-key header)
 //! - Request-level timeout (60s via tower-http TimeoutLayer)
 
-use axum::extract::State;
-use axum::http::{Request, HeaderValue, StatusCode};
 use axum::body::Body;
+use axum::extract::State;
+use axum::http::{HeaderValue, Request, StatusCode};
 use axum::middleware::Next;
-use axum::response::{Response, IntoResponse};
+use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
 
 use crate::engine::AppState;
 
 /// Middleware that adds an x-request-id header to every response.
-pub async fn request_id(
-    request: Request<Body>,
-    next: Next,
-) -> Response {
+pub async fn request_id(request: Request<Body>, next: Next) -> Response {
     let request_id = uuid::Uuid::new_v4().to_string();
 
     let mut response = next.run(request).await;
@@ -28,10 +25,7 @@ pub async fn request_id(
 }
 
 /// Middleware that logs query requests (audit trail).
-pub async fn query_audit_log(
-    request: Request<Body>,
-    next: Next,
-) -> Response {
+pub async fn query_audit_log(request: Request<Body>, next: Next) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_string();
     let start = std::time::Instant::now();
@@ -74,20 +68,21 @@ pub async fn api_key_auth(
     }
 
     // Check x-api-key header
-    let provided = request.headers()
+    let provided = request
+        .headers()
         .get("x-api-key")
         .and_then(|v| v.to_str().ok());
 
     match provided {
-        Some(key) if keys.iter().any(|k| constant_time_eq(k.as_bytes(), key.as_bytes())) => {
+        Some(key)
+            if keys
+                .iter()
+                .any(|k| constant_time_eq(k.as_bytes(), key.as_bytes())) =>
+        {
             next.run(request).await
         }
-        Some(_) => {
-            (StatusCode::FORBIDDEN, "Invalid API key").into_response()
-        }
-        None => {
-            (StatusCode::UNAUTHORIZED, "Missing x-api-key header").into_response()
-        }
+        Some(_) => (StatusCode::FORBIDDEN, "Invalid API key").into_response(),
+        None => (StatusCode::UNAUTHORIZED, "Missing x-api-key header").into_response(),
     }
 }
 
@@ -98,11 +93,14 @@ pub async fn rate_limit(
     next: Next,
 ) -> Response {
     // Extract client IP from headers or connection
-    let ip = request.headers()
+    let ip = request
+        .headers()
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("unknown")
-        .split(',').next().unwrap_or("unknown")
+        .split(',')
+        .next()
+        .unwrap_or("unknown")
         .trim()
         .to_string();
 
@@ -126,13 +124,10 @@ pub async fn rate_limit(
 
 /// Catch-all panic handler middleware.
 /// If any downstream handler panics, this returns 500 instead of crashing the server.
-pub async fn panic_recovery(
-    request: Request<Body>,
-    next: Next,
-) -> Response {
+pub async fn panic_recovery(request: Request<Body>, next: Next) -> Response {
     let result = std::panic::AssertUnwindSafe(next.run(request));
 
-    match tokio::task::spawn(async move { result.await }).await {
+    match tokio::task::spawn(result).await {
         Ok(response) => response,
         Err(_) => {
             tracing::error!("Handler panicked — returning 500");
@@ -158,11 +153,11 @@ mod tests {
     use super::*;
     use crate::config::EngineConfig;
     use crate::engine::AppState;
-    use axum::{routing::get, Router, middleware};
     use axum::body::Body;
     use axum::http::Request;
-    use tower::ServiceExt;
+    use axum::{middleware, routing::get, Router};
     use std::sync::Arc;
+    use tower::ServiceExt;
 
     fn test_state(api_keys: Vec<&str>) -> Arc<AppState> {
         Arc::new(AppState {
@@ -178,7 +173,9 @@ mod tests {
         })
     }
 
-    async fn ok_handler() -> &'static str { "ok" }
+    async fn ok_handler() -> &'static str {
+        "ok"
+    }
 
     // ─── constant_time_eq ────────────────────────────────────────
 
@@ -226,7 +223,10 @@ mod tests {
             .layer(middleware::from_fn_with_state(state.clone(), api_key_auth))
             .with_state(state);
 
-        let req = Request::builder().uri("/v1/query").body(Body::empty()).unwrap();
+        let req = Request::builder()
+            .uri("/v1/query")
+            .body(Body::empty())
+            .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), 200);
     }
@@ -239,7 +239,10 @@ mod tests {
             .layer(middleware::from_fn_with_state(state.clone(), api_key_auth))
             .with_state(state);
 
-        let req = Request::builder().uri("/health").body(Body::empty()).unwrap();
+        let req = Request::builder()
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), 200);
     }
@@ -255,7 +258,8 @@ mod tests {
         let req = Request::builder()
             .uri("/v1/query")
             .header("x-api-key", "secret123")
-            .body(Body::empty()).unwrap();
+            .body(Body::empty())
+            .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), 200);
     }
@@ -271,7 +275,8 @@ mod tests {
         let req = Request::builder()
             .uri("/v1/query")
             .header("x-api-key", "wrong")
-            .body(Body::empty()).unwrap();
+            .body(Body::empty())
+            .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), 403);
     }
@@ -284,7 +289,10 @@ mod tests {
             .layer(middleware::from_fn_with_state(state.clone(), api_key_auth))
             .with_state(state);
 
-        let req = Request::builder().uri("/v1/query").body(Body::empty()).unwrap();
+        let req = Request::builder()
+            .uri("/v1/query")
+            .body(Body::empty())
+            .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), 401);
     }

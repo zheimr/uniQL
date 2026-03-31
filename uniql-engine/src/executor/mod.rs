@@ -32,5 +32,5 @@ impl std::fmt::Display for ExecutionError {
 
 /// Check if an HTTP error is retryable (connection failure or server error).
 pub fn is_retryable_reqwest_error(err: &reqwest::Error) -> bool {
-    err.is_connect() || err.is_timeout() || err.status().map_or(false, |s| s.is_server_error())
+    err.is_connect() || err.is_timeout() || err.status().is_some_and(|s| s.is_server_error())
 }

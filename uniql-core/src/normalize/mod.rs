@@ -80,7 +80,7 @@ pub fn parse_duration(raw: &str) -> Result<NormalizedDuration, String> {
         return Err(format!("Invalid duration suffix: {}", raw));
     };
 
-    if seconds.is_infinite() || seconds.is_nan() || seconds > MAX_DURATION_SECS || seconds < 0.0 {
+    if seconds.is_infinite() || seconds.is_nan() || !(0.0..=MAX_DURATION_SECS).contains(&seconds) {
         return Err(format!("Duration out of range (max 365d): {}", raw));
     }
 
@@ -116,8 +116,7 @@ pub fn normalize(bound: BoundQuery) -> Result<NormalizedQuery, String> {
             }
 
             // Resolve percentile shorthand
-            let quantile_value = config::quantile_for_percentile(&func_name)
-                .map(|q| q.to_string());
+            let quantile_value = config::quantile_for_percentile(&func_name).map(|q| q.to_string());
 
             aggregation = Some(NormalizedAggregation {
                 func_name: func_name.clone(),
@@ -129,21 +128,24 @@ pub fn normalize(bound: BoundQuery) -> Result<NormalizedQuery, String> {
 
     // Resolve GROUP BY labels
     let group_by_labels = if let Some(ref gb) = query.group_by {
-        gb.fields.iter().map(|field| {
-            match field {
+        gb.fields
+            .iter()
+            .map(|field| match field {
                 Expr::Ident(name) => name.clone(),
                 Expr::QualifiedIdent(parts) => parts.last().cloned().unwrap_or_default(),
                 _ => String::new(),
-            }
-        }).filter(|s| !s.is_empty()).collect()
+            })
+            .filter(|s| !s.is_empty())
+            .collect()
     } else {
         Vec::new()
     };
 
     // Pre-compute HAVING
-    let having = query.having.as_ref().map(|h| {
-        normalize_having(&h.condition, aggregation.as_ref())
-    });
+    let having = query
+        .having
+        .as_ref()
+        .map(|h| normalize_having(&h.condition, aggregation.as_ref()));
 
     Ok(NormalizedQuery {
         bound,
@@ -161,7 +163,11 @@ fn normalize_having(expr: &Expr, agg: Option<&NormalizedAggregation>) -> Normali
 
     match expr {
         // Compound HAVING: count > 10 AND sum > 100
-        Expr::BinaryOp { op: BinaryOp::And, left, right } => {
+        Expr::BinaryOp {
+            op: BinaryOp::And,
+            left,
+            right,
+        } => {
             let left_str = having_expr_to_string(left, agg.map(|a| a.func_name.as_str()));
             let right_str = having_expr_to_string(right, agg.map(|a| a.func_name.as_str()));
             let full = format!("{} AND {}", left_str, right_str);
@@ -173,7 +179,11 @@ fn normalize_having(expr: &Expr, agg: Option<&NormalizedAggregation>) -> Normali
                 full_expr: Some(full),
             }
         }
-        Expr::BinaryOp { op: BinaryOp::Or, left, right } => {
+        Expr::BinaryOp {
+            op: BinaryOp::Or,
+            left,
+            right,
+        } => {
             let left_str = having_expr_to_string(left, agg.map(|a| a.func_name.as_str()));
             let right_str = having_expr_to_string(right, agg.map(|a| a.func_name.as_str()));
             let full = format!("{} OR {}", left_str, right_str);
@@ -202,7 +212,8 @@ fn normalize_having(expr: &Expr, agg: Option<&NormalizedAggregation>) -> Normali
                 _ => "==",
             };
 
-            let is_agg_ref = matches!(left.as_ref(), Expr::Ident(n) if config::is_aggregate_function(n));
+            let is_agg_ref =
+                matches!(left.as_ref(), Expr::Ident(n) if config::is_aggregate_function(n));
             let lhs = if is_agg_ref {
                 None
             } else {
@@ -230,13 +241,29 @@ fn normalize_having(expr: &Expr, agg: Option<&NormalizedAggregation>) -> Normali
 }
 
 /// Serialize a HAVING sub-expression to string for compound expressions.
-fn having_expr_to_string(expr: &Expr, agg_func: Option<&str>) -> String {
+fn having_expr_to_string(expr: &Expr, _agg_func: Option<&str>) -> String {
     match expr {
-        Expr::BinaryOp { op: BinaryOp::And, left, right } => {
-            format!("{} AND {}", having_expr_to_string(left, agg_func), having_expr_to_string(right, agg_func))
+        Expr::BinaryOp {
+            op: BinaryOp::And,
+            left,
+            right,
+        } => {
+            format!(
+                "{} AND {}",
+                having_expr_to_string(left, _agg_func),
+                having_expr_to_string(right, _agg_func)
+            )
         }
-        Expr::BinaryOp { op: BinaryOp::Or, left, right } => {
-            format!("({} OR {})", having_expr_to_string(left, agg_func), having_expr_to_string(right, agg_func))
+        Expr::BinaryOp {
+            op: BinaryOp::Or,
+            left,
+            right,
+        } => {
+            format!(
+                "({} OR {})",
+                having_expr_to_string(left, _agg_func),
+                having_expr_to_string(right, _agg_func)
+            )
         }
         Expr::BinaryOp { left, op, right } => {
             let op_str = match op {
@@ -328,7 +355,7 @@ mod tests {
     #[test]
     fn test_normalize_rate_with_duration() {
         let nq = prepare_and_normalize(
-            "FROM metrics WHERE __name__ = \"http_requests_total\" COMPUTE rate(value, 5m)"
+            "FROM metrics WHERE __name__ = \"http_requests_total\" COMPUTE rate(value, 5m)",
         );
         assert!(nq.aggregation.is_some());
         let agg = nq.aggregation.unwrap();
@@ -373,7 +400,7 @@ mod tests {
     fn test_normalize_having_uses_actual_aggregate() {
         // This is the bug fix: LogsQL used to hardcode "count(*)" regardless of actual aggregate
         let nq = prepare_and_normalize(
-            "FROM logs WHERE service = \"api\" COMPUTE count() GROUP BY level HAVING count > 100"
+            "FROM logs WHERE service = \"api\" COMPUTE count() GROUP BY level HAVING count > 100",
         );
         let having = nq.having.unwrap();
         assert_eq!(having.aggregate_func, Some("count".to_string()));
@@ -383,9 +410,7 @@ mod tests {
 
     #[test]
     fn test_normalize_within_duration() {
-        let nq = prepare_and_normalize(
-            "FROM logs WHERE service = \"api\" WITHIN last 15m"
-        );
+        let nq = prepare_and_normalize("FROM logs WHERE service = \"api\" WITHIN last 15m");
         assert!(nq.duration.is_some());
         assert!((nq.duration.unwrap().seconds - 900.0).abs() < 0.001);
     }
@@ -420,9 +445,7 @@ mod tests {
 
     #[test]
     fn test_normalize_no_compute() {
-        let nq = prepare_and_normalize(
-            "FROM logs WHERE service = \"api\""
-        );
+        let nq = prepare_and_normalize("FROM logs WHERE service = \"api\"");
         assert!(nq.aggregation.is_none());
         assert!(nq.having.is_none());
         assert!(nq.group_by_labels.is_empty());
@@ -434,10 +457,17 @@ mod tests {
             "FROM logs WHERE service = \"api\" COMPUTE count() GROUP BY level HAVING count > 10 AND count < 1000"
         );
         let having = nq.having.unwrap();
-        assert!(having.full_expr.is_some(), "Compound HAVING should have full_expr");
+        assert!(
+            having.full_expr.is_some(),
+            "Compound HAVING should have full_expr"
+        );
         let full = having.full_expr.unwrap();
         assert!(full.contains("AND"), "Should contain AND: {}", full);
-        assert!(full.contains("> 10") || full.contains(">"), "Should contain threshold: {}", full);
+        assert!(
+            full.contains("> 10") || full.contains(">"),
+            "Should contain threshold: {}",
+            full
+        );
     }
 
     #[test]
@@ -454,10 +484,13 @@ mod tests {
     #[test]
     fn test_normalize_having_simple_no_full_expr() {
         let nq = prepare_and_normalize(
-            "FROM logs WHERE service = \"api\" COMPUTE count() GROUP BY level HAVING count > 100"
+            "FROM logs WHERE service = \"api\" COMPUTE count() GROUP BY level HAVING count > 100",
         );
         let having = nq.having.unwrap();
-        assert!(having.full_expr.is_none(), "Simple HAVING should not have full_expr");
+        assert!(
+            having.full_expr.is_none(),
+            "Simple HAVING should not have full_expr"
+        );
         assert_eq!(having.op, ">");
         assert_eq!(having.value, "100");
     }
@@ -486,7 +519,7 @@ mod tests {
     #[test]
     fn test_normalize_group_by_qualified() {
         let nq = prepare_and_normalize(
-            "FROM metrics WHERE __name__ = \"cpu\" COMPUTE avg(value) GROUP BY labels.env"
+            "FROM metrics WHERE __name__ = \"cpu\" COMPUTE avg(value) GROUP BY labels.env",
         );
         assert_eq!(nq.group_by_labels, vec!["env"]);
     }

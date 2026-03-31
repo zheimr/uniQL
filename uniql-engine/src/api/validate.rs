@@ -44,7 +44,11 @@ pub async fn handle_validate(
                 valid: false,
                 error: Some(e.message),
                 hint: e.hint,
-                signals: ast.inferred_signal_types().iter().map(|s| format!("{:?}", s)).collect(),
+                signals: ast
+                    .inferred_signal_types()
+                    .iter()
+                    .map(|s| format!("{:?}", s))
+                    .collect(),
                 clauses: ast.clause_summary(),
                 warnings: vec![],
             }));
@@ -55,7 +59,11 @@ pub async fn handle_validate(
         valid: true,
         error: None,
         hint: None,
-        signals: ast.inferred_signal_types().iter().map(|s| format!("{:?}", s)).collect(),
+        signals: ast
+            .inferred_signal_types()
+            .iter()
+            .map(|s| format!("{:?}", s))
+            .collect(),
         clauses: ast.clause_summary(),
         warnings: warnings.iter().map(|w| w.message.clone()).collect(),
     }))
@@ -67,7 +75,9 @@ mod tests {
     use axum::Json;
 
     async fn validate_query(query: &str) -> ValidateResponse {
-        let req = ValidateRequest { query: query.to_string() };
+        let req = ValidateRequest {
+            query: query.to_string(),
+        };
         match handle_validate(Json(req)).await {
             Ok(Json(resp)) => resp,
             Err((_, Json(resp))) => resp,
@@ -108,13 +118,17 @@ mod tests {
 
     #[tokio::test]
     async fn valid_query_with_compute() {
-        let resp = validate_query("FROM metrics WHERE __name__ = \"requests\" COMPUTE rate(value, 1m)").await;
+        let resp =
+            validate_query("FROM metrics WHERE __name__ = \"requests\" COMPUTE rate(value, 1m)")
+                .await;
         assert!(resp.valid);
     }
 
     #[tokio::test]
     async fn valid_query_with_group_by() {
-        let resp = validate_query("FROM metrics WHERE __name__ = \"cpu\" COMPUTE avg(cpu) GROUP BY host").await;
+        let resp =
+            validate_query("FROM metrics WHERE __name__ = \"cpu\" COMPUTE avg(cpu) GROUP BY host")
+                .await;
         assert!(resp.valid);
     }
 
@@ -165,7 +179,8 @@ mod tests {
 
     #[tokio::test]
     async fn valid_where_operators() {
-        let resp = validate_query("FROM metrics WHERE __name__ = \"cpu\" AND host != \"test\"").await;
+        let resp =
+            validate_query("FROM metrics WHERE __name__ = \"cpu\" AND host != \"test\"").await;
         assert!(resp.valid);
     }
 

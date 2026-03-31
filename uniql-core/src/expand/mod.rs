@@ -9,9 +9,9 @@
 //! - No conditional logic (not Turing complete)
 //! - Expand-before-transpile: output is a clean AST
 
-use std::collections::HashMap;
 use crate::ast::*;
 use crate::config;
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct ExpandError {
@@ -45,10 +45,13 @@ pub fn expand(query: &Query) -> Result<Query, ExpandError> {
                 message: format!("Duplicate DEFINE: '{}' is already defined", define.name),
             });
         }
-        defs.insert(define.name.clone(), Definition {
-            params: define.params.clone(),
-            body: define.body.clone(),
-        });
+        defs.insert(
+            define.name.clone(),
+            Definition {
+                params: define.params.clone(),
+                body: define.body.clone(),
+            },
+        );
     }
 
     // If no definitions, return query as-is
@@ -62,12 +65,16 @@ pub fn expand(query: &Query) -> Result<Query, ExpandError> {
 
     if let Some(ref wc) = result.where_clause {
         let expanded = expand_expr(&wc.condition, &defs, &mut expansion_count)?;
-        result.where_clause = Some(WhereClause { condition: expanded });
+        result.where_clause = Some(WhereClause {
+            condition: expanded,
+        });
     }
 
     if let Some(ref having) = result.having {
         let expanded = expand_expr(&having.condition, &defs, &mut expansion_count)?;
-        result.having = Some(HavingClause { condition: expanded });
+        result.having = Some(HavingClause {
+            condition: expanded,
+        });
     }
 
     Ok(result)
@@ -82,7 +89,8 @@ fn expand_expr(
     *count += 1;
     if *count > config::MAX_DEFINE_EXPANSIONS as u32 {
         return Err(ExpandError {
-            message: "Maximum expansion depth exceeded. Check for circular DEFINE references.".to_string(),
+            message: "Maximum expansion depth exceeded. Check for circular DEFINE references."
+                .to_string(),
         });
     }
 
@@ -94,7 +102,8 @@ fn expand_expr(
                     return Err(ExpandError {
                         message: format!(
                             "'{}' expects {} arguments but was used without parentheses",
-                            name, def.params.len()
+                            name,
+                            def.params.len()
                         ),
                     });
                 }
@@ -112,7 +121,9 @@ fn expand_expr(
                     return Err(ExpandError {
                         message: format!(
                             "'{}' expects {} arguments, got {}",
-                            name, def.params.len(), args.len()
+                            name,
+                            def.params.len(),
+                            args.len()
                         ),
                     });
                 }
@@ -124,10 +135,8 @@ fn expand_expr(
                 expand_expr(&substituted, defs, count)
             } else {
                 // Regular function call — expand args
-                let expanded_args: Result<Vec<Expr>, ExpandError> = args
-                    .iter()
-                    .map(|a| expand_expr(a, defs, count))
-                    .collect();
+                let expanded_args: Result<Vec<Expr>, ExpandError> =
+                    args.iter().map(|a| expand_expr(a, defs, count)).collect();
                 Ok(Expr::FunctionCall {
                     name: name.clone(),
                     args: expanded_args?,
@@ -150,7 +159,11 @@ fn expand_expr(
             Ok(Expr::Not(Box::new(expanded)))
         }
 
-        Expr::StringMatch { expr: inner, op, pattern } => {
+        Expr::StringMatch {
+            expr: inner,
+            op,
+            pattern,
+        } => {
             let expanded = expand_expr(inner, defs, count)?;
             Ok(Expr::StringMatch {
                 expr: Box::new(expanded),
@@ -159,12 +172,14 @@ fn expand_expr(
             })
         }
 
-        Expr::InList { expr: inner, list, negated } => {
+        Expr::InList {
+            expr: inner,
+            list,
+            negated,
+        } => {
             let expanded_inner = expand_expr(inner, defs, count)?;
-            let expanded_list: Result<Vec<Expr>, ExpandError> = list
-                .iter()
-                .map(|e| expand_expr(e, defs, count))
-                .collect();
+            let expanded_list: Result<Vec<Expr>, ExpandError> =
+                list.iter().map(|e| expand_expr(e, defs, count)).collect();
             Ok(Expr::InList {
                 expr: Box::new(expanded_inner),
                 list: expanded_list?,
@@ -189,16 +204,30 @@ fn substitute_param(expr: &Expr, param: &str, arg: &Expr) -> Expr {
         Expr::Not(inner) => Expr::Not(Box::new(substitute_param(inner, param, arg))),
         Expr::FunctionCall { name, args } => Expr::FunctionCall {
             name: name.clone(),
-            args: args.iter().map(|a| substitute_param(a, param, arg)).collect(),
+            args: args
+                .iter()
+                .map(|a| substitute_param(a, param, arg))
+                .collect(),
         },
-        Expr::StringMatch { expr: inner, op, pattern } => Expr::StringMatch {
+        Expr::StringMatch {
+            expr: inner,
+            op,
+            pattern,
+        } => Expr::StringMatch {
             expr: Box::new(substitute_param(inner, param, arg)),
             op: op.clone(),
             pattern: pattern.clone(),
         },
-        Expr::InList { expr: inner, list, negated } => Expr::InList {
+        Expr::InList {
+            expr: inner,
+            list,
+            negated,
+        } => Expr::InList {
             expr: Box::new(substitute_param(inner, param, arg)),
-            list: list.iter().map(|e| substitute_param(e, param, arg)).collect(),
+            list: list
+                .iter()
+                .map(|e| substitute_param(e, param, arg))
+                .collect(),
             negated: *negated,
         },
         _ => expr.clone(),
@@ -221,9 +250,7 @@ mod tests {
 
     #[test]
     fn test_no_defines_passthrough() {
-        let q = parse_and_expand(
-            "FROM metrics WHERE service = \"nginx\""
-        ).unwrap();
+        let q = parse_and_expand("FROM metrics WHERE service = \"nginx\"").unwrap();
         assert!(q.from.is_some());
         assert!(q.defines.is_empty());
     }
@@ -242,7 +269,7 @@ mod tests {
     #[test]
     fn test_duplicate_define_error() {
         let result = parse_and_expand(
-            "DEFINE x = service = \"a\" DEFINE x = service = \"b\" FROM metrics WHERE x"
+            "DEFINE x = service = \"a\" DEFINE x = service = \"b\" FROM metrics WHERE x",
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Duplicate DEFINE"));
@@ -251,9 +278,7 @@ mod tests {
     #[test]
     fn test_undefined_ref_passthrough() {
         // Unknown identifier should pass through (not an error)
-        let q = parse_and_expand(
-            "FROM metrics WHERE unknown_var = \"test\""
-        ).unwrap();
+        let q = parse_and_expand("FROM metrics WHERE unknown_var = \"test\"").unwrap();
         assert!(q.where_clause.is_some());
     }
 }

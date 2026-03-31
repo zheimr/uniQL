@@ -3,9 +3,9 @@
 //! Input:  AST with FROM metrics, logs ... CORRELATE ON host WITHIN 60s
 //! Output: QueryPlan with separate sub-queries for each signal/backend
 
+use crate::config::EngineConfig;
 use uniql_core::ast::*;
 use uniql_core::transpiler;
-use crate::config::EngineConfig;
 
 #[derive(Debug)]
 pub struct QueryPlan {
@@ -51,7 +51,11 @@ impl std::fmt::Display for PlanError {
 pub fn plan(ast: &Query, config: &EngineConfig) -> Result<QueryPlan, PlanError> {
     let sources = match &ast.from {
         Some(from) => &from.sources,
-        None => return Err(PlanError { message: "No FROM clause".to_string() }),
+        None => {
+            return Err(PlanError {
+                message: "No FROM clause".to_string(),
+            })
+        }
     };
 
     let mut sub_queries = Vec::new();
@@ -63,7 +67,10 @@ pub fn plan(ast: &Query, config: &EngineConfig) -> Result<QueryPlan, PlanError> 
         let backend = config
             .find_backend(signal_str, source.backend_hint.as_deref())
             .ok_or_else(|| PlanError {
-                message: format!("No backend for signal '{}' (hint: {:?})", signal_str, source.backend_hint),
+                message: format!(
+                    "No backend for signal '{}' (hint: {:?})",
+                    signal_str, source.backend_hint
+                ),
             })?;
 
         // Determine transpiler — also handle Unknown("vlogs") routing to logsql
@@ -90,8 +97,8 @@ pub fn plan(ast: &Query, config: &EngineConfig) -> Result<QueryPlan, PlanError> 
         let signal_ast = build_signal_ast(ast, &effective_source);
 
         // Try normalized transpile path first, fall back to legacy
-        let transpiler_impl = transpiler::get_transpiler(transpiler_name)
-            .ok_or_else(|| PlanError {
+        let transpiler_impl =
+            transpiler::get_transpiler(transpiler_name).ok_or_else(|| PlanError {
                 message: format!("No transpiler for '{}'", transpiler_name),
             })?;
 
@@ -101,16 +108,18 @@ pub fn plan(ast: &Query, config: &EngineConfig) -> Result<QueryPlan, PlanError> 
         })?;
 
         let output = match uniql_core::normalize::normalize(bound) {
-            Ok(normalized) => {
-                transpiler_impl.transpile_normalized(&normalized).map_err(|e| PlanError {
+            Ok(normalized) => transpiler_impl
+                .transpile_normalized(&normalized)
+                .map_err(|e| PlanError {
                     message: format!("Transpile error for {}: {}", signal_str, e),
-                })?
-            }
+                })?,
             Err(_) => {
                 // Normalize failed — fallback to legacy transpile (skip normalized path)
-                transpiler_impl.transpile(&signal_ast).map_err(|e| PlanError {
-                    message: format!("Transpile error for {}: {}", signal_str, e),
-                })?
+                transpiler_impl
+                    .transpile(&signal_ast)
+                    .map_err(|e| PlanError {
+                        message: format!("Transpile error for {}: {}", signal_str, e),
+                    })?
             }
         };
 
@@ -120,17 +129,15 @@ pub fn plan(ast: &Query, config: &EngineConfig) -> Result<QueryPlan, PlanError> 
         let step = extract_step(ast);
 
         // Extract SHOW format for the formatter
-        let show_format = ast.show.as_ref().map(|s| {
-            match s.format {
-                ShowFormat::Table => "table".to_string(),
-                ShowFormat::Count => "count".to_string(),
-                ShowFormat::Timeseries => "timeseries".to_string(),
-                ShowFormat::Timeline => "timeline".to_string(),
-                ShowFormat::Heatmap => "heatmap".to_string(),
-                ShowFormat::Flamegraph => "flamegraph".to_string(),
-                ShowFormat::Alert => "alert".to_string(),
-                ShowFormat::Topology => "topology".to_string(),
-            }
+        let show_format = ast.show.as_ref().map(|s| match s.format {
+            ShowFormat::Table => "table".to_string(),
+            ShowFormat::Count => "count".to_string(),
+            ShowFormat::Timeseries => "timeseries".to_string(),
+            ShowFormat::Timeline => "timeline".to_string(),
+            ShowFormat::Heatmap => "heatmap".to_string(),
+            ShowFormat::Flamegraph => "flamegraph".to_string(),
+            ShowFormat::Alert => "alert".to_string(),
+            ShowFormat::Topology => "topology".to_string(),
         });
 
         let effective_signal_str = signal_type_str(&effective_signal_type);
@@ -190,7 +197,10 @@ fn build_signal_ast(original: &Query, source: &DataSource) -> Query {
     // Pass through other clauses
     ast.within = original.within.clone();
     // PARSE only valid for log signals — don't pass to metrics/traces
-    if matches!(source.signal_type, SignalType::Logs | SignalType::Unknown(_)) {
+    if matches!(
+        source.signal_type,
+        SignalType::Logs | SignalType::Unknown(_)
+    ) {
         ast.parse = original.parse.clone();
     }
     ast.compute = original.compute.clone();
@@ -206,9 +216,17 @@ fn build_signal_ast(original: &Query, source: &DataSource) -> Query {
 /// Filter WHERE conditions to only include those relevant to a given signal.
 /// Conditions with a qualified ident (e.g., metrics.cpu, m.cpu) are matched by prefix/alias.
 /// Conditions without a qualifier (e.g., service = "x") are included for all signals.
-fn filter_conditions_for_signal(expr: &Expr, alias: Option<&str>, signal_prefix: &str) -> Option<Expr> {
+fn filter_conditions_for_signal(
+    expr: &Expr,
+    alias: Option<&str>,
+    signal_prefix: &str,
+) -> Option<Expr> {
     match expr {
-        Expr::BinaryOp { left, op: BinaryOp::And, right } => {
+        Expr::BinaryOp {
+            left,
+            op: BinaryOp::And,
+            right,
+        } => {
             let l = filter_conditions_for_signal(left, alias, signal_prefix);
             let r = filter_conditions_for_signal(right, alias, signal_prefix);
             match (l, r) {
@@ -222,7 +240,11 @@ fn filter_conditions_for_signal(expr: &Expr, alias: Option<&str>, signal_prefix:
                 (None, None) => None,
             }
         }
-        Expr::BinaryOp { left, op: BinaryOp::Or, right } => {
+        Expr::BinaryOp {
+            left,
+            op: BinaryOp::Or,
+            right,
+        } => {
             let l = filter_conditions_for_signal(left, alias, signal_prefix);
             let r = filter_conditions_for_signal(right, alias, signal_prefix);
             match (l, r) {
@@ -298,7 +320,11 @@ fn strip_signal_prefix(expr: &Expr, alias: Option<&str>, signal_prefix: &str) ->
                 expr.clone()
             }
         }
-        Expr::StringMatch { expr: inner, op, pattern } => Expr::StringMatch {
+        Expr::StringMatch {
+            expr: inner,
+            op,
+            pattern,
+        } => Expr::StringMatch {
             expr: Box::new(strip_signal_prefix(inner, alias, signal_prefix)),
             op: op.clone(),
             pattern: pattern.clone(),
@@ -407,7 +433,11 @@ mod tests {
     fn test_vlogs_produces_logsql_native_query() {
         let result = plan_query("SHOW table FROM vlogs WHERE job = \"fortigate\"").unwrap();
         let sq = &result.sub_queries[0];
-        assert!(sq.native_query.contains("job"), "native_query: {}", sq.native_query);
+        assert!(
+            sq.native_query.contains("job"),
+            "native_query: {}",
+            sq.native_query
+        );
     }
 
     #[test]
@@ -521,7 +551,9 @@ mod tests {
 
     #[test]
     fn test_plan_error_display() {
-        let err = PlanError { message: "test error".to_string() };
+        let err = PlanError {
+            message: "test error".to_string(),
+        };
         assert_eq!(format!("{}", err), "Plan error: test error");
     }
 
@@ -542,19 +574,28 @@ mod tests {
     #[test]
     fn test_show_timeseries_format() {
         let result = plan_query("SHOW timeseries FROM metrics WHERE __name__ = \"up\"").unwrap();
-        assert_eq!(result.sub_queries[0].show_format, Some("timeseries".to_string()));
+        assert_eq!(
+            result.sub_queries[0].show_format,
+            Some("timeseries".to_string())
+        );
     }
 
     #[test]
     fn test_show_timeline_format() {
         let result = plan_query("SHOW timeline FROM logs WHERE service = \"api\"").unwrap();
-        assert_eq!(result.sub_queries[0].show_format, Some("timeline".to_string()));
+        assert_eq!(
+            result.sub_queries[0].show_format,
+            Some("timeline".to_string())
+        );
     }
 
     #[test]
     fn test_show_heatmap_format() {
         let result = plan_query("SHOW heatmap FROM metrics WHERE __name__ = \"latency\"").unwrap();
-        assert_eq!(result.sub_queries[0].show_format, Some("heatmap".to_string()));
+        assert_eq!(
+            result.sub_queries[0].show_format,
+            Some("heatmap".to_string())
+        );
     }
 
     #[test]
@@ -593,7 +634,11 @@ mod tests {
     fn test_multi_signal_produces_two_subqueries() {
         let result = plan_query("FROM metrics, logs CORRELATE ON host WITHIN 60s").unwrap();
         assert_eq!(result.sub_queries.len(), 2);
-        let types: Vec<&str> = result.sub_queries.iter().map(|sq| sq.signal_type.as_str()).collect();
+        let types: Vec<&str> = result
+            .sub_queries
+            .iter()
+            .map(|sq| sq.signal_type.as_str())
+            .collect();
         assert!(types.contains(&"metrics"));
         assert!(types.contains(&"logs"));
     }
@@ -602,7 +647,8 @@ mod tests {
 
     #[test]
     fn test_within_this_week() {
-        let ast = uniql_core::prepare("FROM metrics WHERE __name__ = \"up\" WITHIN this_week").unwrap();
+        let ast =
+            uniql_core::prepare("FROM metrics WHERE __name__ = \"up\" WITHIN this_week").unwrap();
         let result = plan(&ast, &default_config()).unwrap();
         let sq = &result.sub_queries[0];
         assert!(sq.has_time_range);

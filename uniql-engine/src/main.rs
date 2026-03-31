@@ -10,10 +10,16 @@ mod normalize_result;
 mod planner;
 mod rate_limit;
 
-use axum::{extract::DefaultBodyLimit, http::StatusCode, middleware, routing::{get, post}, Router};
+use axum::{
+    extract::DefaultBodyLimit,
+    http::StatusCode,
+    middleware,
+    routing::{get, post},
+    Router,
+};
 use std::sync::Arc;
 use std::time::Duration;
-use tower_http::cors::{CorsLayer, AllowOrigin};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
@@ -47,18 +53,30 @@ async fn main() {
         let reachable = match bc.backend_type.as_str() {
             "prometheus" | "victoriametrics" => {
                 executor::prometheus::PrometheusExecutor::new(&bc.name, &bc.url)
-                    .health().await.unwrap_or(false)
+                    .health()
+                    .await
+                    .unwrap_or(false)
             }
-            "victorialogs" => {
-                executor::victorialogs::VictoriaLogsExecutor::new(&bc.name, &bc.url)
-                    .health().await.unwrap_or(false)
-            }
+            "victorialogs" => executor::victorialogs::VictoriaLogsExecutor::new(&bc.name, &bc.url)
+                .health()
+                .await
+                .unwrap_or(false),
             _ => false,
         };
         if reachable {
-            tracing::info!("Backend '{}' ({}) at {} — reachable", bc.name, bc.backend_type, bc.url);
+            tracing::info!(
+                "Backend '{}' ({}) at {} — reachable",
+                bc.name,
+                bc.backend_type,
+                bc.url
+            );
         } else {
-            tracing::warn!("Backend '{}' ({}) at {} — UNREACHABLE (queries will fail)", bc.name, bc.backend_type, bc.url);
+            tracing::warn!(
+                "Backend '{}' ({}) at {} — UNREACHABLE (queries will fail)",
+                bc.name,
+                bc.backend_type,
+                bc.url
+            );
         }
     }
 
@@ -66,7 +84,9 @@ async fn main() {
     let cors = if config.cors_origins.is_empty() {
         CorsLayer::permissive()
     } else {
-        let origins: Vec<_> = config.cors_origins.iter()
+        let origins: Vec<_> = config
+            .cors_origins
+            .iter()
             .filter_map(|o| o.parse().ok())
             .collect();
         CorsLayer::new().allow_origin(AllowOrigin::list(origins))
@@ -79,23 +99,40 @@ async fn main() {
     let rate_limiter = rate_limit::RateLimiter::new(100); // 100 req/s per IP
     tracing::info!("Rate limiter: 100 req/s per IP");
 
-    let state = Arc::new(engine::AppState { config, cache, metrics, rate_limiter });
+    let state = Arc::new(engine::AppState {
+        config,
+        cache,
+        metrics,
+        rate_limiter,
+    });
 
     // Routes — layers applied bottom-up: last added = outermost
     let app = Router::new()
         .route("/v1/query", post(api::query::handle_query))
         .route("/v1/validate", post(api::validate::handle_validate))
         .route("/v1/explain", post(api::explain::handle_explain))
-        .route("/v1/investigate", post(api::investigate::handle_investigate))
+        .route(
+            "/v1/investigate",
+            post(api::investigate::handle_investigate),
+        )
         .route("/health", get(api::health::handle_health))
         .route("/metrics", get(api::metrics::handle_metrics))
         .route("/v1/schema", get(api::schema::handle_schema))
         .layer(DefaultBodyLimit::max(256 * 1024)) // 256KB body limit
         .layer(cors)
         .layer(TraceLayer::new_for_http())
-        .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(60)))
-        .layer(middleware::from_fn_with_state(state.clone(), middleware_layers::rate_limit))
-        .layer(middleware::from_fn_with_state(state.clone(), middleware_layers::api_key_auth))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(60),
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            middleware_layers::rate_limit,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            middleware_layers::api_key_auth,
+        ))
         .layer(middleware::from_fn(middleware_layers::query_audit_log))
         .layer(middleware::from_fn(middleware_layers::request_id))
         .layer(middleware::from_fn(middleware_layers::panic_recovery))

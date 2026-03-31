@@ -46,19 +46,19 @@ pub enum TokenKind {
     DurationLit(String), // 5m, 1h, 24h, 500ms, 30s
 
     // Operators
-    Eq,        // =
-    Neq,       // !=
-    Gt,        // >
-    Lt,        // <
-    Gte,       // >=
-    Lte,       // <=
-    RegexMatch, // =~
+    Eq,           // =
+    Neq,          // !=
+    Gt,           // >
+    Lt,           // <
+    Gte,          // >=
+    Lte,          // <=
+    RegexMatch,   // =~
     RegexNoMatch, // !~
-    Plus,      // +
-    Minus,     // -
-    Star,      // *
-    Slash,     // /
-    Percent,   // %
+    Plus,         // +
+    Minus,        // -
+    Star,         // *
+    Slash,        // /
+    Percent,      // %
 
     // Delimiters
     LParen,    // (
@@ -94,7 +94,11 @@ pub struct Span {
 
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?} @ {}..{}", self.kind, self.span.start, self.span.end)
+        write!(
+            f,
+            "{:?} @ {}..{}",
+            self.kind, self.span.start, self.span.end
+        )
     }
 }
 
@@ -111,7 +115,9 @@ pub enum LexError {
     #[error("Invalid number '{text}' at position {pos}")]
     InvalidNumber { text: String, pos: usize },
 
-    #[error("Invalid duration '{text}' at position {pos}. Expected format like 5m, 1h, 30s, 500ms")]
+    #[error(
+        "Invalid duration '{text}' at position {pos}. Expected format like 5m, 1h, 30s, 500ms"
+    )]
     InvalidDuration { text: String, pos: usize },
 }
 
@@ -457,7 +463,8 @@ mod tests {
 
     #[test]
     fn test_basic_keywords() {
-        let kinds = token_kinds("FROM metrics WHERE service = \"nginx\" WITHIN last 5m SHOW timeseries");
+        let kinds =
+            token_kinds("FROM metrics WHERE service = \"nginx\" WITHIN last 5m SHOW timeseries");
         assert_eq!(
             kinds,
             vec![

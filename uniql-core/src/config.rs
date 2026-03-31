@@ -35,14 +35,27 @@ pub fn quantile_for_percentile(name: &str) -> Option<&'static str> {
 pub fn is_aggregate_function(name: &str) -> bool {
     matches!(
         name.to_lowercase().as_str(),
-        "rate" | "irate" | "increase"
-        | "count" | "count_over_time"
-        | "avg" | "sum" | "min" | "max"
-        | "p50" | "p75" | "p90" | "p95" | "p99" | "p999"
-        | "stddev" | "stdvar"
-        | "topk" | "bottomk"
-        | "histogram_quantile"
-        | "predict_linear"
+        "rate"
+            | "irate"
+            | "increase"
+            | "count"
+            | "count_over_time"
+            | "avg"
+            | "sum"
+            | "min"
+            | "max"
+            | "p50"
+            | "p75"
+            | "p90"
+            | "p95"
+            | "p99"
+            | "p999"
+            | "stddev"
+            | "stdvar"
+            | "topk"
+            | "bottomk"
+            | "histogram_quantile"
+            | "predict_linear"
     )
 }
 
@@ -50,10 +63,16 @@ pub fn is_aggregate_function(name: &str) -> bool {
 pub fn is_range_function(name: &str) -> bool {
     matches!(
         name.to_lowercase().as_str(),
-        "rate" | "irate" | "increase"
-        | "count_over_time" | "avg_over_time" | "sum_over_time"
-        | "min_over_time" | "max_over_time"
-        | "stddev_over_time" | "stdvar_over_time"
-        | "predict_linear"
+        "rate"
+            | "irate"
+            | "increase"
+            | "count_over_time"
+            | "avg_over_time"
+            | "sum_over_time"
+            | "min_over_time"
+            | "max_over_time"
+            | "stddev_over_time"
+            | "stdvar_over_time"
+            | "predict_linear"
     )
 }

@@ -6,9 +6,9 @@ use axum::{extract::State, http::StatusCode, Json};
 use serde::Serialize;
 use std::sync::Arc;
 
+use super::ErrorResponse;
 use crate::engine::AppState;
 use crate::executor::prometheus::PrometheusExecutor;
-use super::ErrorResponse;
 
 #[derive(Debug, Serialize)]
 pub struct SchemaResponse {
@@ -35,10 +35,22 @@ pub async fn handle_schema(
             let executor = PrometheusExecutor::new(&bc.name, &bc.url);
 
             // Fetch metric names: GET /api/v1/label/__name__/values
-            if let Ok(result) = executor.query("count({__name__=~\".+\"}) by (__name__)").await {
-                if let Some(data) = result.data.get("data").and_then(|d| d.get("result")).and_then(|r| r.as_array()) {
+            if let Ok(result) = executor
+                .query("count({__name__=~\".+\"}) by (__name__)")
+                .await
+            {
+                if let Some(data) = result
+                    .data
+                    .get("data")
+                    .and_then(|d| d.get("result"))
+                    .and_then(|r| r.as_array())
+                {
                     for item in data.iter().take(200) {
-                        if let Some(name) = item.get("metric").and_then(|m| m.get("__name__")).and_then(|n| n.as_str()) {
+                        if let Some(name) = item
+                            .get("metric")
+                            .and_then(|m| m.get("__name__"))
+                            .and_then(|n| n.as_str())
+                        {
                             if !metrics.contains(&name.to_string()) {
                                 metrics.push(name.to_string());
                             }
@@ -49,7 +61,12 @@ pub async fn handle_schema(
 
             // Fetch common label names from "up" metric
             if let Ok(result) = executor.query("up").await {
-                if let Some(data) = result.data.get("data").and_then(|d| d.get("result")).and_then(|r| r.as_array()) {
+                if let Some(data) = result
+                    .data
+                    .get("data")
+                    .and_then(|d| d.get("result"))
+                    .and_then(|r| r.as_array())
+                {
                     for item in data {
                         if let Some(metric) = item.get("metric").and_then(|m| m.as_object()) {
                             for key in metric.keys() {
@@ -60,9 +77,17 @@ pub async fn handle_schema(
                         }
                     }
                     // Collect values for "job" label
-                    let job_values: Vec<String> = data.iter()
-                        .filter_map(|item| item.get("metric")?.get("job")?.as_str().map(|s| s.to_string()))
-                        .collect::<std::collections::HashSet<_>>().into_iter().collect();
+                    let job_values: Vec<String> = data
+                        .iter()
+                        .filter_map(|item| {
+                            item.get("metric")?
+                                .get("job")?
+                                .as_str()
+                                .map(|s| s.to_string())
+                        })
+                        .collect::<std::collections::HashSet<_>>()
+                        .into_iter()
+                        .collect();
                     if !job_values.is_empty() {
                         label_values.insert("job".to_string(), job_values);
                     }
@@ -86,8 +111,8 @@ pub async fn handle_schema(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{EngineConfig, BackendConfig};
-    use wiremock::{MockServer, Mock, matchers, ResponseTemplate};
+    use crate::config::{BackendConfig, EngineConfig};
+    use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
     async fn schema_returns_metrics_and_labels() {
@@ -102,7 +127,8 @@ mod tests {
                     {"metric": {"__name__": "cpu_usage"}, "value": [1, "100"]},
                 ]}
             })))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
 
         // Mock up metric
         Mock::given(matchers::path("/api/v1/query"))
@@ -117,8 +143,13 @@ mod tests {
 
         let config = EngineConfig {
             listen: "0.0.0.0:0".to_string(),
-            backends: vec![BackendConfig { name: "vm".to_string(), backend_type: "prometheus".to_string(), url: server.uri() }],
-            api_keys: vec![], cors_origins: vec![],
+            backends: vec![BackendConfig {
+                name: "vm".to_string(),
+                backend_type: "prometheus".to_string(),
+                url: server.uri(),
+            }],
+            api_keys: vec![],
+            cors_origins: vec![],
         };
         let state = Arc::new(AppState {
             config,

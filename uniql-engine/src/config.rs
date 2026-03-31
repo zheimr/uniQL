@@ -48,18 +48,16 @@ impl EngineConfig {
         // 1. Try TOML config file
         if let Ok(path) = std::env::var("UNIQL_CONFIG") {
             match std::fs::read_to_string(&path) {
-                Ok(contents) => {
-                    match toml_from_str(&contents) {
-                        Ok(config) => {
-                            tracing::info!("Config loaded from {}", path);
-                            return config;
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to parse config file {}: {}", path, e);
-                            std::process::exit(1);
-                        }
+                Ok(contents) => match toml_from_str(&contents) {
+                    Ok(config) => {
+                        tracing::info!("Config loaded from {}", path);
+                        return config;
                     }
-                }
+                    Err(e) => {
+                        tracing::error!("Failed to parse config file {}: {}", path, e);
+                        std::process::exit(1);
+                    }
+                },
                 Err(e) => {
                     tracing::error!("Failed to read config file {}: {}", path, e);
                     std::process::exit(1);
@@ -68,8 +66,7 @@ impl EngineConfig {
         }
 
         // 2. Try env variables
-        let listen = std::env::var("UNIQL_LISTEN")
-            .unwrap_or_else(|_| "0.0.0.0:9090".to_string());
+        let listen = std::env::var("UNIQL_LISTEN").unwrap_or_else(|_| "0.0.0.0:9090".to_string());
 
         let backends = match std::env::var("UNIQL_BACKENDS") {
             Ok(json) => {
@@ -89,15 +86,30 @@ impl EngineConfig {
 
         // API keys from env (comma-separated)
         let api_keys = std::env::var("UNIQL_API_KEYS")
-            .map(|s| s.split(',').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect())
+            .map(|s| {
+                s.split(',')
+                    .map(|k| k.trim().to_string())
+                    .filter(|k| !k.is_empty())
+                    .collect()
+            })
             .unwrap_or_default();
 
         // CORS origins from env (comma-separated)
         let cors_origins = std::env::var("UNIQL_CORS_ORIGINS")
-            .map(|s| s.split(',').map(|o| o.trim().to_string()).filter(|o| !o.is_empty()).collect())
+            .map(|s| {
+                s.split(',')
+                    .map(|o| o.trim().to_string())
+                    .filter(|o| !o.is_empty())
+                    .collect()
+            })
             .unwrap_or_default();
 
-        EngineConfig { listen, backends, api_keys, cors_origins }
+        EngineConfig {
+            listen,
+            backends,
+            api_keys,
+            cors_origins,
+        }
     }
 
     pub fn find_backend(&self, signal: &str, hint: Option<&str>) -> Option<&BackendConfig> {
@@ -106,12 +118,14 @@ impl EngineConfig {
         }
 
         match signal {
-            "metrics" => self.backends.iter().find(|b| {
-                b.backend_type == "prometheus" || b.backend_type == "victoriametrics"
-            }),
-            "logs" | "vlogs" | "victorialogs" => self.backends.iter().find(|b| {
-                b.backend_type == "victorialogs" || b.backend_type == "loki"
-            }),
+            "metrics" => self
+                .backends
+                .iter()
+                .find(|b| b.backend_type == "prometheus" || b.backend_type == "victoriametrics"),
+            "logs" | "vlogs" | "victorialogs" => self
+                .backends
+                .iter()
+                .find(|b| b.backend_type == "victorialogs" || b.backend_type == "loki"),
             _ => self.backends.first(),
         }
     }
@@ -149,7 +163,11 @@ mod tests {
     #[test]
     fn default_config_prometheus_backend() {
         let cfg = EngineConfig::default();
-        let prom = cfg.backends.iter().find(|b| b.backend_type == "prometheus").unwrap();
+        let prom = cfg
+            .backends
+            .iter()
+            .find(|b| b.backend_type == "prometheus")
+            .unwrap();
         assert_eq!(prom.name, "victoria");
         assert!(prom.url.contains("8428"));
     }
@@ -157,7 +175,11 @@ mod tests {
     #[test]
     fn default_config_victorialogs_backend() {
         let cfg = EngineConfig::default();
-        let vlogs = cfg.backends.iter().find(|b| b.backend_type == "victorialogs").unwrap();
+        let vlogs = cfg
+            .backends
+            .iter()
+            .find(|b| b.backend_type == "victorialogs")
+            .unwrap();
         assert_eq!(vlogs.name, "vlogs");
         assert!(vlogs.url.contains("9428"));
     }
@@ -220,26 +242,22 @@ mod tests {
 
     #[test]
     fn find_backend_victoriametrics_type() {
-        let cfg = make_config(vec![
-            BackendConfig {
-                name: "vm".to_string(),
-                backend_type: "victoriametrics".to_string(),
-                url: "http://vm:8428".to_string(),
-            },
-        ]);
+        let cfg = make_config(vec![BackendConfig {
+            name: "vm".to_string(),
+            backend_type: "victoriametrics".to_string(),
+            url: "http://vm:8428".to_string(),
+        }]);
         let b = cfg.find_backend("metrics", None).unwrap();
         assert_eq!(b.backend_type, "victoriametrics");
     }
 
     #[test]
     fn find_backend_loki_type() {
-        let cfg = make_config(vec![
-            BackendConfig {
-                name: "loki".to_string(),
-                backend_type: "loki".to_string(),
-                url: "http://loki:3100".to_string(),
-            },
-        ]);
+        let cfg = make_config(vec![BackendConfig {
+            name: "loki".to_string(),
+            backend_type: "loki".to_string(),
+            url: "http://loki:3100".to_string(),
+        }]);
         let b = cfg.find_backend("logs", None).unwrap();
         assert_eq!(b.backend_type, "loki");
     }
@@ -338,14 +356,22 @@ backends = []
     fn load_api_keys_csv_parsing() {
         // Test CSV parsing logic directly
         let raw = "key1, key2, key3";
-        let keys: Vec<String> = raw.split(',').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect();
+        let keys: Vec<String> = raw
+            .split(',')
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty())
+            .collect();
         assert_eq!(keys, vec!["key1", "key2", "key3"]);
     }
 
     #[test]
     fn load_cors_origins_csv_parsing() {
         let raw = "http://localhost, http://example.com";
-        let origins: Vec<String> = raw.split(',').map(|o| o.trim().to_string()).filter(|o| !o.is_empty()).collect();
+        let origins: Vec<String> = raw
+            .split(',')
+            .map(|o| o.trim().to_string())
+            .filter(|o| !o.is_empty())
+            .collect();
         assert_eq!(origins.len(), 2);
     }
 

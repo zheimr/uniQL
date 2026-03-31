@@ -29,11 +29,7 @@ impl Query {
     /// Infer signal types from the FROM clause
     pub fn inferred_signal_types(&self) -> Vec<SignalType> {
         match &self.from {
-            Some(from) => from
-                .sources
-                .iter()
-                .map(|s| s.signal_type.clone())
-                .collect(),
+            Some(from) => from.sources.iter().map(|s| s.signal_type.clone()).collect(),
             None => vec![],
         }
     }
@@ -124,9 +120,11 @@ impl WhereClause {
 
 fn count_conditions(expr: &Expr) -> usize {
     match expr {
-        Expr::BinaryOp { left, right, op: BinaryOp::And | BinaryOp::Or } => {
-            count_conditions(left) + count_conditions(right)
-        }
+        Expr::BinaryOp {
+            left,
+            right,
+            op: BinaryOp::And | BinaryOp::Or,
+        } => count_conditions(left) + count_conditions(right),
         Expr::Not(inner) => count_conditions(inner),
         _ => 1,
     }
@@ -162,10 +160,7 @@ pub enum Expr {
     Not(Box<Expr>),
 
     /// Function call: rate(value, 1m), count(), avg(cpu)
-    FunctionCall {
-        name: String,
-        args: Vec<Expr>,
-    },
+    FunctionCall { name: String, args: Vec<Expr> },
 
     /// IN expression: service IN ["nginx", "envoy"]
     InList {
@@ -195,13 +190,13 @@ pub enum Expr {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum BinaryOp {
     // Comparison
-    Eq,          // =
-    Neq,         // !=
-    Gt,          // >
-    Lt,          // <
-    Gte,         // >=
-    Lte,         // <=
-    RegexMatch,  // =~
+    Eq,           // =
+    Neq,          // !=
+    Gt,           // >
+    Lt,           // <
+    Gte,          // >=
+    Lte,          // <=
+    RegexMatch,   // =~
     RegexNoMatch, // !~
 
     // Logical
@@ -233,10 +228,10 @@ pub struct ParseClause {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum ParseMode {
-    Json,                // PARSE json
-    Logfmt,              // PARSE logfmt
-    Pattern(String),     // PARSE pattern "<ip> - <method> <status>"
-    Regexp(String),      // PARSE regexp "(?P<status>\\d{3})"
+    Json,            // PARSE json
+    Logfmt,          // PARSE logfmt
+    Pattern(String), // PARSE pattern "<ip> - <method> <status>"
+    Regexp(String),  // PARSE regexp "(?P<status>\\d{3})"
 }
 
 // ─── WITHIN Clause ─────────────────────────────────────────────────────────────
@@ -265,8 +260,8 @@ pub struct ComputeClause {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ComputeFunction {
-    pub name: String,       // rate, avg, p99, count, sum
-    pub args: Vec<Expr>,    // arguments
+    pub name: String,          // rate, avg, p99, count, sum
+    pub args: Vec<Expr>,       // arguments
     pub alias: Option<String>, // AS error_rate
 }
 
@@ -289,7 +284,7 @@ pub struct HavingClause {
 #[derive(Debug, Clone, Serialize)]
 pub struct CorrelateClause {
     pub on_fields: Vec<String>,
-    pub within: Option<String>,       // time window, e.g., "30s"
+    pub within: Option<String>,         // time window, e.g., "30s"
     pub skew_tolerance: Option<String>, // clock skew tolerance
 }
 
@@ -298,8 +293,8 @@ pub struct CorrelateClause {
 #[derive(Debug, Clone, Serialize)]
 pub struct DefineClause {
     pub name: String,
-    pub params: Vec<String>,     // empty for simple aliases
-    pub body: Expr,              // the expression this definition expands to
+    pub params: Vec<String>, // empty for simple aliases
+    pub body: Expr,          // the expression this definition expands to
 }
 
 // ─── SHOW Clause ───────────────────────────────────────────────────────────────

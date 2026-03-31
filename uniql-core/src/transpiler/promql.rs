@@ -3,11 +3,11 @@
 //! Converts a UNIQL AST into a valid PromQL query string.
 //! Supports metric selection, label filtering, rate, aggregations, GROUP BY, HAVING.
 
+use super::{BackendType, TranspileError, TranspileOutput, Transpiler};
 use crate::ast::*;
 use crate::bind::{BoundCondition, BoundOrGroup};
 use crate::config;
 use crate::normalize::NormalizedQuery;
-use super::{Transpiler, TranspileOutput, TranspileError, BackendType};
 
 // ─── Trait Implementation ─────────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ struct PromQLBuilder {
 
 struct LabelMatcher {
     label: String,
-    op: String,    // =, !=, =~, !~
+    op: String, // =, !=, =~, !~
     value: String,
 }
 
@@ -89,8 +89,10 @@ impl PromQLBuilder {
         }
 
         // If there are native fragments and nothing else, return native directly
-        if !self.native_fragments.is_empty() && self.label_matchers.is_empty()
-            && self.metric_name.is_none() && self.aggregation.is_none()
+        if !self.native_fragments.is_empty()
+            && self.label_matchers.is_empty()
+            && self.metric_name.is_none()
+            && self.aggregation.is_none()
         {
             return Ok(self.native_fragments.join(" "));
         }
@@ -125,15 +127,24 @@ impl PromQLBuilder {
 
                 let inner = match agg.func_name.as_str() {
                     "rate" => {
-                        let duration = self.range_duration.as_deref().unwrap_or(config::DEFAULT_RANGE_DURATION);
+                        let duration = self
+                            .range_duration
+                            .as_deref()
+                            .unwrap_or(config::DEFAULT_RANGE_DURATION);
                         format!("rate({}[{}])", selector, duration)
                     }
                     "irate" => {
-                        let duration = self.range_duration.as_deref().unwrap_or(config::DEFAULT_RANGE_DURATION);
+                        let duration = self
+                            .range_duration
+                            .as_deref()
+                            .unwrap_or(config::DEFAULT_RANGE_DURATION);
                         format!("irate({}[{}])", selector, duration)
                     }
                     "increase" => {
-                        let duration = self.range_duration.as_deref().unwrap_or(config::DEFAULT_RANGE_DURATION);
+                        let duration = self
+                            .range_duration
+                            .as_deref()
+                            .unwrap_or(config::DEFAULT_RANGE_DURATION);
                         format!("increase({}[{}])", selector, duration)
                     }
                     "count" => {
@@ -159,50 +170,36 @@ impl PromQLBuilder {
                         if self.group_by_labels.is_empty() {
                             format!("avg({})", inner)
                         } else {
-                            format!(
-                                "avg by ({}) ({})",
-                                self.group_by_labels.join(", "),
-                                inner
-                            )
+                            format!("avg by ({}) ({})", self.group_by_labels.join(", "), inner)
                         }
                     }
                     Some("sum") => {
                         if self.group_by_labels.is_empty() {
                             format!("sum({})", inner)
                         } else {
-                            format!(
-                                "sum by ({}) ({})",
-                                self.group_by_labels.join(", "),
-                                inner
-                            )
+                            format!("sum by ({}) ({})", self.group_by_labels.join(", "), inner)
                         }
                     }
                     Some("min") => {
                         if self.group_by_labels.is_empty() {
                             format!("min({})", inner)
                         } else {
-                            format!(
-                                "min by ({}) ({})",
-                                self.group_by_labels.join(", "),
-                                inner
-                            )
+                            format!("min by ({}) ({})", self.group_by_labels.join(", "), inner)
                         }
                     }
                     Some("max") => {
                         if self.group_by_labels.is_empty() {
                             format!("max({})", inner)
                         } else {
-                            format!(
-                                "max by ({}) ({})",
-                                self.group_by_labels.join(", "),
-                                inner
-                            )
+                            format!("max by ({}) ({})", self.group_by_labels.join(", "), inner)
                         }
                     }
                     Some(name @ ("p50" | "p75" | "p90" | "p95" | "p99" | "p999")) => {
-                        let quantile = config::quantile_for_percentile(name)
-                            .unwrap_or("0.99");
-                        let duration = self.range_duration.as_deref().unwrap_or(config::DEFAULT_RANGE_DURATION);
+                        let quantile = config::quantile_for_percentile(name).unwrap_or("0.99");
+                        let duration = self
+                            .range_duration
+                            .as_deref()
+                            .unwrap_or(config::DEFAULT_RANGE_DURATION);
                         format!(
                             "histogram_quantile({}, rate({}[{}]))",
                             quantile, selector, duration
@@ -226,19 +223,12 @@ impl PromQLBuilder {
             if let Some(ref agg) = self.aggregation {
                 match agg.func_name.as_str() {
                     "rate" | "irate" | "increase" => {
-                        query = format!(
-                            "sum by ({}) ({})",
-                            self.group_by_labels.join(", "),
-                            query
-                        );
+                        query = format!("sum by ({}) ({})", self.group_by_labels.join(", "), query);
                     }
                     "count" => {
                         if self.range_duration.is_some() {
-                            query = format!(
-                                "sum by ({}) ({})",
-                                self.group_by_labels.join(", "),
-                                query
-                            );
+                            query =
+                                format!("sum by ({}) ({})", self.group_by_labels.join(", "), query);
                         }
                     }
                     _ => {} // already handled above
@@ -271,10 +261,12 @@ pub fn transpile(query: &Query) -> Result<String, TranspileError> {
         for source in &from.sources {
             match source.signal_type {
                 SignalType::Metrics | SignalType::Unknown(_) => {}
-                ref other => return Err(TranspileError::UnsupportedSignalType {
-                    backend: "promql".to_string(),
-                    signal: other.clone(),
-                }),
+                ref other => {
+                    return Err(TranspileError::UnsupportedSignalType {
+                        backend: "promql".to_string(),
+                        signal: other.clone(),
+                    })
+                }
             }
         }
     }
@@ -300,7 +292,8 @@ pub fn transpile(query: &Query) -> Result<String, TranspileError> {
     if let Some(ref compute) = query.compute {
         if compute.functions.len() > 1 {
             return Err(TranspileError::UnsupportedExpression(
-                "PromQL supports only one aggregation per query. Split into multiple queries.".to_string()
+                "PromQL supports only one aggregation per query. Split into multiple queries."
+                    .to_string(),
             ));
         }
         if let Some(func) = compute.functions.first() {
@@ -383,11 +376,7 @@ fn extract_conditions(expr: &Expr, builder: &mut PromQLBuilder) -> Result<(), Tr
             }
         }
 
-        Expr::BinaryOp {
-            left,
-            op,
-            right,
-        } => {
+        Expr::BinaryOp { left, op, right } => {
             let label = expr_to_label(left);
             let value = expr_to_value(right);
 
@@ -416,11 +405,7 @@ fn extract_conditions(expr: &Expr, builder: &mut PromQLBuilder) -> Result<(), Tr
             }
         }
 
-        Expr::StringMatch {
-            expr,
-            op,
-            pattern,
-        } => {
+        Expr::StringMatch { expr, op, pattern } => {
             let label = expr_to_label(expr);
             if let Some(label) = label {
                 let regex_pattern = match op {
@@ -545,8 +530,12 @@ fn expr_to_promql_filter(expr: &Expr) -> String {
             // For comparison operators, check if LHS is a simple aggregate ref
             // If so, emit only "op value" since the aggregation result is implicit in PromQL
             match op {
-                BinaryOp::Gt | BinaryOp::Lt | BinaryOp::Gte | BinaryOp::Lte
-                | BinaryOp::Eq | BinaryOp::Neq => {
+                BinaryOp::Gt
+                | BinaryOp::Lt
+                | BinaryOp::Gte
+                | BinaryOp::Lte
+                | BinaryOp::Eq
+                | BinaryOp::Neq => {
                     if is_aggregate_ref(left) {
                         let r = expr_to_promql_value(right);
                         format!("{} {}", op_str, r)
@@ -608,10 +597,12 @@ fn transpile_from_normalized(nq: &NormalizedQuery) -> Result<String, TranspileEr
         for source in &from.sources {
             match source.signal_type {
                 SignalType::Metrics | SignalType::Unknown(_) => {}
-                ref other => return Err(TranspileError::UnsupportedSignalType {
-                    backend: "promql".to_string(),
-                    signal: other.clone(),
-                }),
+                ref other => {
+                    return Err(TranspileError::UnsupportedSignalType {
+                        backend: "promql".to_string(),
+                        signal: other.clone(),
+                    })
+                }
             }
         }
     }
@@ -666,7 +657,11 @@ fn transpile_from_normalized(nq: &NormalizedQuery) -> Result<String, TranspileEr
                     value: regex,
                 });
             }
-            BoundCondition::FieldStringMatch { name, match_op, pattern } => {
+            BoundCondition::FieldStringMatch {
+                name,
+                match_op,
+                pattern,
+            } => {
                 let regex_pattern = match match_op {
                     StringMatchOp::Contains => format!(".*{}.*", pattern),
                     StringMatchOp::StartsWith => format!("{}.*", pattern),
@@ -681,18 +676,17 @@ fn transpile_from_normalized(nq: &NormalizedQuery) -> Result<String, TranspileEr
             BoundCondition::ContentFilter { .. } => {
                 // PromQL doesn't have content filters — skip
             }
-            BoundCondition::Native { backend, query } => {
-                match backend.as_deref() {
-                    None | Some("promql") | Some("metricsql") | Some("prometheus") => {
-                        builder.native_fragments.push(query.clone());
-                    }
-                    Some(other) => {
-                        return Err(TranspileError::UnsupportedExpression(
-                            format!("NATIVE('{}', ...) cannot be transpiled to PromQL", other),
-                        ));
-                    }
+            BoundCondition::Native { backend, query } => match backend.as_deref() {
+                None | Some("promql") | Some("metricsql") | Some("prometheus") => {
+                    builder.native_fragments.push(query.clone());
                 }
-            }
+                Some(other) => {
+                    return Err(TranspileError::UnsupportedExpression(format!(
+                        "NATIVE('{}', ...) cannot be transpiled to PromQL",
+                        other
+                    )));
+                }
+            },
             BoundCondition::CrossFieldOr { branches } => {
                 // Build each branch as a separate selector and join with ` or `
                 let metric = builder.metric_name.as_deref().unwrap_or("");
@@ -703,7 +697,12 @@ fn transpile_from_normalized(nq: &NormalizedQuery) -> Result<String, TranspileEr
                         match cond {
                             BoundCondition::StreamLabel { name, op, value }
                             | BoundCondition::FieldFilter { name, op, value } => {
-                                matchers.push(format!("{}{}\"{}\"", name, op.as_promql_str(), value));
+                                matchers.push(format!(
+                                    "{}{}\"{}\"",
+                                    name,
+                                    op.as_promql_str(),
+                                    value
+                                ));
                             }
                             BoundCondition::MetricName(name) => {
                                 matchers.push(format!("__name__=\"{}\"", name));
@@ -815,10 +814,7 @@ mod tests {
             "FROM metrics WHERE __name__ = \"http_requests_total\" COMPUTE rate(value, 5m) GROUP BY service",
         )
         .unwrap();
-        assert_eq!(
-            result,
-            "sum by (service) (rate(http_requests_total[5m]))"
-        );
+        assert_eq!(result, "sum by (service) (rate(http_requests_total[5m]))");
     }
 
     #[test]
@@ -827,10 +823,7 @@ mod tests {
             "FROM metrics WHERE __name__ = \"node_cpu_seconds_total\" COMPUTE avg(value) GROUP BY instance",
         )
         .unwrap();
-        assert_eq!(
-            result,
-            "avg by (instance) (node_cpu_seconds_total)"
-        );
+        assert_eq!(result, "avg by (instance) (node_cpu_seconds_total)");
     }
 
     #[test]
@@ -839,10 +832,7 @@ mod tests {
             "FROM metrics WHERE __name__ = \"http_requests_total\" AND service =~ \"api.*\"",
         )
         .unwrap();
-        assert_eq!(
-            result,
-            "http_requests_total{service=~\"api.*\"}"
-        );
+        assert_eq!(result, "http_requests_total{service=~\"api.*\"}");
     }
 
     #[test]
@@ -851,10 +841,7 @@ mod tests {
             "FROM metrics WHERE __name__ = \"http_requests_total\" AND service IN [\"nginx\", \"envoy\"]",
         )
         .unwrap();
-        assert_eq!(
-            result,
-            "http_requests_total{service=~\"nginx|envoy\"}"
-        );
+        assert_eq!(result, "http_requests_total{service=~\"nginx|envoy\"}");
     }
 
     #[test]
@@ -863,10 +850,7 @@ mod tests {
             "FROM metrics WHERE __name__ = \"http_requests_total\" AND path CONTAINS \"api\"",
         )
         .unwrap();
-        assert_eq!(
-            result,
-            "http_requests_total{path=~\".*api.*\"}"
-        );
+        assert_eq!(result, "http_requests_total{path=~\".*api.*\"}");
     }
 
     #[test]
@@ -875,10 +859,7 @@ mod tests {
             "FROM metrics WHERE __name__ = \"http_requests_total\" AND host STARTS WITH \"prod-\"",
         )
         .unwrap();
-        assert_eq!(
-            result,
-            "http_requests_total{host=~\"prod-.*\"}"
-        );
+        assert_eq!(result, "http_requests_total{host=~\"prod-.*\"}");
     }
 
     #[test]
@@ -913,9 +894,7 @@ mod tests {
 
     #[test]
     fn test_rejects_correlate() {
-        let result = transpile_query(
-            "FROM metrics, logs CORRELATE ON service WITHIN 30s",
-        );
+        let result = transpile_query("FROM metrics, logs CORRELATE ON service WITHIN 30s");
         assert!(result.is_err());
     }
 
@@ -951,7 +930,10 @@ mod tests {
         )
         .unwrap();
         // OR on same label → regex matcher
-        assert!(result.contains("service=~\"nginx|envoy\"") || result.contains("service=~\"envoy|nginx\""));
+        assert!(
+            result.contains("service=~\"nginx|envoy\"")
+                || result.contains("service=~\"envoy|nginx\"")
+        );
     }
 
     #[test]
@@ -969,9 +951,7 @@ mod tests {
 
     #[test]
     fn test_mirror_simple_metric() {
-        assert_mirror(
-            "FROM metrics WHERE __name__ = \"http_requests_total\" AND job = \"api\""
-        );
+        assert_mirror("FROM metrics WHERE __name__ = \"http_requests_total\" AND job = \"api\"");
     }
 
     #[test]
@@ -1012,7 +992,7 @@ mod tests {
     #[test]
     fn test_mirror_contains() {
         assert_mirror(
-            "FROM metrics WHERE __name__ = \"http_requests_total\" AND path CONTAINS \"api\""
+            "FROM metrics WHERE __name__ = \"http_requests_total\" AND path CONTAINS \"api\"",
         );
     }
 
@@ -1053,34 +1033,34 @@ mod tests {
 
     #[test]
     fn test_native_full_query() {
-        let result = transpile_normalized_query(
-            "FROM metrics WHERE NATIVE(\"rate(up{job='api'}[5m])\")"
-        ).unwrap();
+        let result =
+            transpile_normalized_query("FROM metrics WHERE NATIVE(\"rate(up{job='api'}[5m])\")")
+                .unwrap();
         assert_eq!(result, "rate(up{job='api'}[5m])");
     }
 
     #[test]
     fn test_native_partial_in_where() {
         let result = transpile_normalized_query(
-            "FROM metrics WHERE __name__ = \"http_requests_total\" AND NATIVE(\"job=~'api.*'\")"
-        ).unwrap();
+            "FROM metrics WHERE __name__ = \"http_requests_total\" AND NATIVE(\"job=~'api.*'\")",
+        )
+        .unwrap();
         assert!(result.contains("job=~'api.*'"), "Got: {}", result);
         assert!(result.contains("http_requests_total"), "Got: {}", result);
     }
 
     #[test]
     fn test_native_with_backend() {
-        let result = transpile_normalized_query(
-            "FROM metrics WHERE NATIVE(\"promql\", \"up{job='api'}\")"
-        ).unwrap();
+        let result =
+            transpile_normalized_query("FROM metrics WHERE NATIVE(\"promql\", \"up{job='api'}\")")
+                .unwrap();
         assert_eq!(result, "up{job='api'}");
     }
 
     #[test]
     fn test_native_wrong_backend() {
-        let result = transpile_normalized_query(
-            "FROM metrics WHERE NATIVE(\"logql\", \"something\")"
-        );
+        let result =
+            transpile_normalized_query("FROM metrics WHERE NATIVE(\"logql\", \"something\")");
         assert!(result.is_err());
     }
 
@@ -1091,19 +1071,39 @@ mod tests {
         let result = transpile_normalized_query(
             "FROM metrics WHERE __name__ = \"up\" AND job = \"api\" OR __name__ = \"up\" AND env = \"prod\""
         ).unwrap();
-        assert!(result.contains(" or "), "Should contain PromQL 'or' operator. Got: {}", result);
-        assert!(result.contains("job"), "Should contain job matcher. Got: {}", result);
-        assert!(result.contains("env"), "Should contain env matcher. Got: {}", result);
+        assert!(
+            result.contains(" or "),
+            "Should contain PromQL 'or' operator. Got: {}",
+            result
+        );
+        assert!(
+            result.contains("job"),
+            "Should contain job matcher. Got: {}",
+            result
+        );
+        assert!(
+            result.contains("env"),
+            "Should contain env matcher. Got: {}",
+            result
+        );
     }
 
     #[test]
     fn test_same_field_or_produces_regex() {
         let result = transpile_normalized_query(
-            "FROM metrics WHERE __name__ = \"up\" AND (job = \"api\" OR job = \"web\")"
-        ).unwrap();
-        assert!(result.contains("=~"), "Same-field OR should use regex. Got: {}", result);
-        assert!(result.contains("api|web") || result.contains("api") && result.contains("web"),
-            "Should contain both values. Got: {}", result);
+            "FROM metrics WHERE __name__ = \"up\" AND (job = \"api\" OR job = \"web\")",
+        )
+        .unwrap();
+        assert!(
+            result.contains("=~"),
+            "Same-field OR should use regex. Got: {}",
+            result
+        );
+        assert!(
+            result.contains("api|web") || result.contains("api") && result.contains("web"),
+            "Should contain both values. Got: {}",
+            result
+        );
     }
 
     #[test]
@@ -1141,29 +1141,29 @@ mod tests {
     #[test]
     fn test_compute_sum() {
         let result = transpile_query(
-            "FROM metrics WHERE __name__ = \"http_requests_total\" COMPUTE sum(value) GROUP BY job"
-        ).unwrap();
+            "FROM metrics WHERE __name__ = \"http_requests_total\" COMPUTE sum(value) GROUP BY job",
+        )
+        .unwrap();
         assert!(result.contains("sum"), "Got: {}", result);
     }
 
     #[test]
     fn test_compute_min_max() {
-        let min_r = transpile_query(
-            "FROM metrics WHERE __name__ = \"latency\" COMPUTE min(value)"
-        ).unwrap();
+        let min_r = transpile_query("FROM metrics WHERE __name__ = \"latency\" COMPUTE min(value)")
+            .unwrap();
         assert!(min_r.contains("min"), "Got: {}", min_r);
 
-        let max_r = transpile_query(
-            "FROM metrics WHERE __name__ = \"latency\" COMPUTE max(value)"
-        ).unwrap();
+        let max_r = transpile_query("FROM metrics WHERE __name__ = \"latency\" COMPUTE max(value)")
+            .unwrap();
         assert!(max_r.contains("max"), "Got: {}", max_r);
     }
 
     #[test]
     fn test_compute_count() {
         let result = transpile_query(
-            "FROM metrics WHERE __name__ = \"http_requests_total\" COMPUTE count()"
-        ).unwrap();
+            "FROM metrics WHERE __name__ = \"http_requests_total\" COMPUTE count()",
+        )
+        .unwrap();
         assert!(result.contains("count"), "Got: {}", result);
     }
 
@@ -1171,9 +1171,8 @@ mod tests {
 
     #[test]
     fn test_regex_no_match() {
-        let result = transpile_query(
-            "FROM metrics WHERE __name__ = \"up\" AND job !~ \"test.*\""
-        ).unwrap();
+        let result =
+            transpile_query("FROM metrics WHERE __name__ = \"up\" AND job !~ \"test.*\"").unwrap();
         assert!(result.contains("!~"), "Got: {}", result);
     }
 
@@ -1181,17 +1180,15 @@ mod tests {
     fn test_gte_lte_operators() {
         // These become label selectors in PromQL (only =, !=, =~, !~ supported)
         // Non-equality ops on labels are treated as = in PromQL
-        let result = transpile_query(
-            "FROM metrics WHERE __name__ = \"cpu\" AND host = \"prod\""
-        ).unwrap();
+        let result =
+            transpile_query("FROM metrics WHERE __name__ = \"cpu\" AND host = \"prod\"").unwrap();
         assert!(result.contains("host=\"prod\""), "Got: {}", result);
     }
 
     #[test]
     fn test_within_time_in_query() {
-        let result = transpile_query(
-            "FROM metrics WHERE __name__ = \"up\" WITHIN last 1h"
-        ).unwrap();
+        let result =
+            transpile_query("FROM metrics WHERE __name__ = \"up\" WITHIN last 1h").unwrap();
         assert!(result.contains("up"), "Got: {}", result);
         // WITHIN doesn't change PromQL output, it's handled by executor
     }

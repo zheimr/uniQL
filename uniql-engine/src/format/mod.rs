@@ -11,8 +11,8 @@ use serde_json::Value;
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct FormatSpec {
-    pub show_format: Option<String>,   // from SHOW clause: "table", "count", "timeseries", etc.
-    pub output_format: String,         // from request: "json" (default)
+    pub show_format: Option<String>, // from SHOW clause: "table", "count", "timeseries", etc.
+    pub output_format: String,       // from request: "json" (default)
     pub limit: u32,
 }
 
@@ -64,10 +64,7 @@ fn apply_limit(data: &Value, limit: u32) -> Value {
     if let Some(results) = data.get("result").and_then(|r| r.as_array()) {
         if results.len() > limit {
             let mut cloned = data.clone();
-            if let Some(result_arr) = cloned
-                .get_mut("result")
-                .and_then(|r| r.as_array_mut())
-            {
+            if let Some(result_arr) = cloned.get_mut("result").and_then(|r| r.as_array_mut()) {
                 result_arr.truncate(limit);
             }
             return cloned;
@@ -117,11 +114,15 @@ fn format_as_table(data: &Value) -> Value {
     }
 
     // Build tabular rows
-    let table_rows: Vec<Vec<Value>> = rows.iter().map(|row| {
-        columns.iter().map(|col| {
-            row.get(col).cloned().unwrap_or(Value::Null)
-        }).collect()
-    }).collect();
+    let table_rows: Vec<Vec<Value>> = rows
+        .iter()
+        .map(|row| {
+            columns
+                .iter()
+                .map(|col| row.get(col).cloned().unwrap_or(Value::Null))
+                .collect()
+        })
+        .collect();
 
     serde_json::json!({
         "format": "table",
@@ -189,7 +190,10 @@ mod tests {
             {"metric": {"host": "a"}, "value": [1, "10"]},
             {"metric": {"host": "b"}, "value": [2, "20"]},
         ]}});
-        let spec = FormatSpec { show_format: Some("table".to_string()), ..Default::default() };
+        let spec = FormatSpec {
+            show_format: Some("table".to_string()),
+            ..Default::default()
+        };
         let result = format_response(&data, &spec);
         assert_eq!(result["format"], "table");
         assert!(result["columns"].as_array().unwrap().len() > 0);
@@ -203,7 +207,10 @@ mod tests {
             {"metric": {"host": "b"}},
             {"metric": {"host": "c"}},
         ]}});
-        let spec = FormatSpec { show_format: Some("count".to_string()), ..Default::default() };
+        let spec = FormatSpec {
+            show_format: Some("count".to_string()),
+            ..Default::default()
+        };
         let result = format_response(&data, &spec);
         assert_eq!(result["format"], "count");
         assert_eq!(result["count"], 3);
@@ -212,7 +219,10 @@ mod tests {
     #[test]
     fn format_response_unknown_show_format_passthrough() {
         let data = json!({"foo": "bar"});
-        let spec = FormatSpec { show_format: Some("unknown".to_string()), ..Default::default() };
+        let spec = FormatSpec {
+            show_format: Some("unknown".to_string()),
+            ..Default::default()
+        };
         let result = format_response(&data, &spec);
         assert_eq!(result, data);
     }

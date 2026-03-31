@@ -38,10 +38,7 @@ pub struct CorrelationMetadata {
 
 /// Correlate results from multiple backends (legacy path, kept as fallback).
 #[allow(dead_code)]
-pub fn correlate(
-    results: &[(String, BackendResult)],
-    plan: &CorrelationPlan,
-) -> CorrelatedResult {
+pub fn correlate(results: &[(String, BackendResult)], plan: &CorrelationPlan) -> CorrelatedResult {
     // Separate by signal type
     let mut metrics_entries: Vec<FlatEntry> = Vec::new();
     let mut logs_entries: Vec<FlatEntry> = Vec::new();
@@ -56,11 +53,15 @@ pub fn correlate(
     }
 
     // Time window in seconds (parse duration string)
-    let window_secs = plan.time_window.as_ref()
+    let window_secs = plan
+        .time_window
+        .as_ref()
         .map(|w| parse_duration_secs(w))
         .unwrap_or(60.0);
 
-    let skew_secs = plan.skew_tolerance.as_ref()
+    let skew_secs = plan
+        .skew_tolerance
+        .as_ref()
         .map(|s| parse_duration_secs(s))
         .unwrap_or(0.0);
 
@@ -90,7 +91,7 @@ pub fn correlate(
             let time_match = match (m.timestamp_epoch, l.timestamp_epoch) {
                 (Some(mt), Some(lt)) => (mt - lt).abs() <= total_window,
                 (None, None) => true, // both missing → field-only match (intentional)
-                _ => false, // one side missing → skip (prevents silent false positives)
+                _ => false,           // one side missing → skip (prevents silent false positives)
             };
 
             if !time_match {
@@ -153,7 +154,8 @@ fn flatten_result(result: &BackendResult, _join_fields: &[String]) -> Vec<FlatEn
     match result.backend_type.as_str() {
         "prometheus" => {
             // Prometheus result format: { data: { result: [ { metric: {}, value: [ts, val] } ] } }
-            if let Some(results_arr) = result.data
+            if let Some(results_arr) = result
+                .data
                 .get("data")
                 .and_then(|d| d.get("result"))
                 .and_then(|r| r.as_array())
@@ -168,12 +170,13 @@ fn flatten_result(result: &BackendResult, _join_fields: &[String]) -> Vec<FlatEn
                         }
                     }
 
-                    let (ts, ts_epoch) = if let Some(val) = item.get("value").and_then(|v| v.as_array()) {
-                        let epoch = val.first().and_then(|t| t.as_f64());
-                        (epoch.map(|e| format!("{}", e)), epoch)
-                    } else {
-                        (None, None)
-                    };
+                    let (ts, ts_epoch) =
+                        if let Some(val) = item.get("value").and_then(|v| v.as_array()) {
+                            let epoch = val.first().and_then(|t| t.as_f64());
+                            (epoch.map(|e| format!("{}", e)), epoch)
+                        } else {
+                            (None, None)
+                        };
 
                     entries.push(FlatEntry {
                         timestamp: ts,
@@ -186,10 +189,7 @@ fn flatten_result(result: &BackendResult, _join_fields: &[String]) -> Vec<FlatEn
         }
         "victorialogs" => {
             // VictoriaLogs: { result: [ { _msg, _time, _stream, field1, field2, ... } ] }
-            if let Some(results_arr) = result.data
-                .get("result")
-                .and_then(|r| r.as_array())
-            {
+            if let Some(results_arr) = result.data.get("result").and_then(|r| r.as_array()) {
                 for item in results_arr {
                     let mut fields = std::collections::HashMap::new();
                     if let Some(obj) = item.as_object() {
@@ -200,8 +200,13 @@ fn flatten_result(result: &BackendResult, _join_fields: &[String]) -> Vec<FlatEn
                         }
                     }
 
-                    let ts = item.get("_time").and_then(|t| t.as_str()).map(|s| s.to_string());
-                    let ts_epoch = ts.as_ref().and_then(|t| crate::normalize_result::parse_timestamp_to_epoch(t));
+                    let ts = item
+                        .get("_time")
+                        .and_then(|t| t.as_str())
+                        .map(|s| s.to_string());
+                    let ts_epoch = ts
+                        .as_ref()
+                        .and_then(|t| crate::normalize_result::parse_timestamp_to_epoch(t));
 
                     entries.push(FlatEntry {
                         timestamp: ts,
@@ -260,7 +265,11 @@ mod tests {
         }
     }
 
-    fn make_normalized_row(ts_epoch: Option<f64>, labels: Vec<(&str, &str)>, value: Option<&str>) -> NormalizedRow {
+    fn make_normalized_row(
+        ts_epoch: Option<f64>,
+        labels: Vec<(&str, &str)>,
+        value: Option<&str>,
+    ) -> NormalizedRow {
         let mut label_map = HashMap::new();
         for (k, v) in labels {
             label_map.insert(k.to_string(), v.to_string());
@@ -329,17 +338,23 @@ mod tests {
 
     #[test]
     fn correlate_basic_field_match() {
-        let metrics = make_backend_result("prometheus", serde_json::json!({
-            "data": {"result": [
-                {"metric": {"host": "srv-01"}, "value": [1000.0, "42"]}
-            ]}
-        }));
+        let metrics = make_backend_result(
+            "prometheus",
+            serde_json::json!({
+                "data": {"result": [
+                    {"metric": {"host": "srv-01"}, "value": [1000.0, "42"]}
+                ]}
+            }),
+        );
         // Include _time so both sides have timestamps — within 60s of epoch 1000
-        let logs = make_backend_result("victorialogs", serde_json::json!({
-            "result": [
-                {"host": "srv-01", "_msg": "error", "_time": "1970-01-01T00:16:50Z"}
-            ]
-        }));
+        let logs = make_backend_result(
+            "victorialogs",
+            serde_json::json!({
+                "result": [
+                    {"host": "srv-01", "_msg": "error", "_time": "1970-01-01T00:16:50Z"}
+                ]
+            }),
+        );
 
         let plan = make_correlation_plan(vec!["host"], Some("60s"));
         let result = correlate(
@@ -348,7 +363,10 @@ mod tests {
         );
 
         assert_eq!(result.metadata.strategy, "TimeFieldJoin");
-        assert!(result.events.len() > 0, "Should correlate on matching host + time window");
+        assert!(
+            result.events.len() > 0,
+            "Should correlate on matching host + time window"
+        );
         assert_eq!(result.events[0].join_fields.get("host").unwrap(), "srv-01");
         assert!(result.events[0].signals.contains_key("metrics"));
         assert!(result.events[0].signals.contains_key("logs"));
@@ -356,16 +374,22 @@ mod tests {
 
     #[test]
     fn correlate_no_field_match() {
-        let metrics = make_backend_result("prometheus", serde_json::json!({
-            "data": {"result": [
-                {"metric": {"host": "srv-01"}, "value": [1000.0, "1"]}
-            ]}
-        }));
-        let logs = make_backend_result("victorialogs", serde_json::json!({
-            "result": [
-                {"host": "srv-99", "_msg": "error"}
-            ]
-        }));
+        let metrics = make_backend_result(
+            "prometheus",
+            serde_json::json!({
+                "data": {"result": [
+                    {"metric": {"host": "srv-01"}, "value": [1000.0, "1"]}
+                ]}
+            }),
+        );
+        let logs = make_backend_result(
+            "victorialogs",
+            serde_json::json!({
+                "result": [
+                    {"host": "srv-99", "_msg": "error"}
+                ]
+            }),
+        );
 
         let plan = make_correlation_plan(vec!["host"], Some("60s"));
         let result = correlate(
@@ -377,16 +401,22 @@ mod tests {
 
     #[test]
     fn correlate_time_window_outside() {
-        let metrics = make_backend_result("prometheus", serde_json::json!({
-            "data": {"result": [
-                {"metric": {"host": "srv-01"}, "value": [1000.0, "1"]}
-            ]}
-        }));
-        let logs = make_backend_result("victorialogs", serde_json::json!({
-            "result": [
-                {"host": "srv-01", "_msg": "err", "_time": "2026-03-17T20:31:36Z"}
-            ]
-        }));
+        let metrics = make_backend_result(
+            "prometheus",
+            serde_json::json!({
+                "data": {"result": [
+                    {"metric": {"host": "srv-01"}, "value": [1000.0, "1"]}
+                ]}
+            }),
+        );
+        let logs = make_backend_result(
+            "victorialogs",
+            serde_json::json!({
+                "result": [
+                    {"host": "srv-01", "_msg": "err", "_time": "2026-03-17T20:31:36Z"}
+                ]
+            }),
+        );
 
         // Very small time window — they won't match because epoch values are very different
         let plan = make_correlation_plan(vec!["host"], Some("1s"));
@@ -401,7 +431,8 @@ mod tests {
 
     #[test]
     fn correlate_empty_results() {
-        let metrics = make_backend_result("prometheus", serde_json::json!({"data": {"result": []}}));
+        let metrics =
+            make_backend_result("prometheus", serde_json::json!({"data": {"result": []}}));
         let logs = make_backend_result("victorialogs", serde_json::json!({"result": []}));
 
         let plan = make_correlation_plan(vec!["host"], Some("60s"));
@@ -416,15 +447,21 @@ mod tests {
 
     #[test]
     fn correlate_metadata_counts() {
-        let metrics = make_backend_result("prometheus", serde_json::json!({
-            "data": {"result": [
-                {"metric": {"host": "a"}, "value": [100.0, "1"]},
-                {"metric": {"host": "b"}, "value": [100.0, "2"]},
-            ]}
-        }));
-        let logs = make_backend_result("victorialogs", serde_json::json!({
-            "result": [{"host": "a", "_msg": "err"}]
-        }));
+        let metrics = make_backend_result(
+            "prometheus",
+            serde_json::json!({
+                "data": {"result": [
+                    {"metric": {"host": "a"}, "value": [100.0, "1"]},
+                    {"metric": {"host": "b"}, "value": [100.0, "2"]},
+                ]}
+            }),
+        );
+        let logs = make_backend_result(
+            "victorialogs",
+            serde_json::json!({
+                "result": [{"host": "a", "_msg": "err"}]
+            }),
+        );
 
         let plan = make_correlation_plan(vec!["host"], Some("99999999s"));
         let result = correlate(
@@ -439,12 +476,16 @@ mod tests {
 
     #[test]
     fn correlate_normalized_basic_match() {
-        let metrics_rows = vec![
-            make_normalized_row(Some(1000.0), vec![("host", "srv-01")], Some("42")),
-        ];
-        let logs_rows = vec![
-            make_normalized_row(Some(1005.0), vec![("host", "srv-01")], Some("error")),
-        ];
+        let metrics_rows = vec![make_normalized_row(
+            Some(1000.0),
+            vec![("host", "srv-01")],
+            Some("42"),
+        )];
+        let logs_rows = vec![make_normalized_row(
+            Some(1005.0),
+            vec![("host", "srv-01")],
+            Some("error"),
+        )];
 
         let metrics = make_normalized_result("metrics", metrics_rows);
         let logs = make_normalized_result("logs", logs_rows);
@@ -462,12 +503,14 @@ mod tests {
 
     #[test]
     fn correlate_normalized_no_match_field() {
-        let metrics = make_normalized_result("metrics", vec![
-            make_normalized_row(Some(1000.0), vec![("host", "a")], None),
-        ]);
-        let logs = make_normalized_result("logs", vec![
-            make_normalized_row(Some(1000.0), vec![("host", "b")], None),
-        ]);
+        let metrics = make_normalized_result(
+            "metrics",
+            vec![make_normalized_row(Some(1000.0), vec![("host", "a")], None)],
+        );
+        let logs = make_normalized_result(
+            "logs",
+            vec![make_normalized_row(Some(1000.0), vec![("host", "b")], None)],
+        );
 
         let plan = make_correlation_plan(vec!["host"], Some("60s"));
         let result = correlate_normalized(
@@ -479,12 +522,14 @@ mod tests {
 
     #[test]
     fn correlate_normalized_outside_time_window() {
-        let metrics = make_normalized_result("metrics", vec![
-            make_normalized_row(Some(1000.0), vec![("host", "a")], None),
-        ]);
-        let logs = make_normalized_result("logs", vec![
-            make_normalized_row(Some(2000.0), vec![("host", "a")], None),
-        ]);
+        let metrics = make_normalized_result(
+            "metrics",
+            vec![make_normalized_row(Some(1000.0), vec![("host", "a")], None)],
+        );
+        let logs = make_normalized_result(
+            "logs",
+            vec![make_normalized_row(Some(2000.0), vec![("host", "a")], None)],
+        );
 
         let plan = make_correlation_plan(vec!["host"], Some("10s"));
         let result = correlate_normalized(
@@ -496,13 +541,21 @@ mod tests {
 
     #[test]
     fn correlate_normalized_multiple_matches() {
-        let metrics = make_normalized_result("metrics", vec![
-            make_normalized_row(Some(1000.0), vec![("host", "a")], Some("10")),
-            make_normalized_row(Some(1100.0), vec![("host", "a")], Some("20")),
-        ]);
-        let logs = make_normalized_result("logs", vec![
-            make_normalized_row(Some(1050.0), vec![("host", "a")], Some("err1")),
-        ]);
+        let metrics = make_normalized_result(
+            "metrics",
+            vec![
+                make_normalized_row(Some(1000.0), vec![("host", "a")], Some("10")),
+                make_normalized_row(Some(1100.0), vec![("host", "a")], Some("20")),
+            ],
+        );
+        let logs = make_normalized_result(
+            "logs",
+            vec![make_normalized_row(
+                Some(1050.0),
+                vec![("host", "a")],
+                Some("err1"),
+            )],
+        );
 
         let plan = make_correlation_plan(vec!["host"], Some("60s"));
         let result = correlate_normalized(
@@ -515,13 +568,21 @@ mod tests {
 
     #[test]
     fn correlate_normalized_composite_join_key() {
-        let metrics = make_normalized_result("metrics", vec![
-            make_normalized_row(Some(1000.0), vec![("host", "a"), ("job", "api")], None),
-            make_normalized_row(Some(1000.0), vec![("host", "a"), ("job", "web")], None),
-        ]);
-        let logs = make_normalized_result("logs", vec![
-            make_normalized_row(Some(1000.0), vec![("host", "a"), ("job", "api")], None),
-        ]);
+        let metrics = make_normalized_result(
+            "metrics",
+            vec![
+                make_normalized_row(Some(1000.0), vec![("host", "a"), ("job", "api")], None),
+                make_normalized_row(Some(1000.0), vec![("host", "a"), ("job", "web")], None),
+            ],
+        );
+        let logs = make_normalized_result(
+            "logs",
+            vec![make_normalized_row(
+                Some(1000.0),
+                vec![("host", "a"), ("job", "api")],
+                None,
+            )],
+        );
 
         let plan = make_correlation_plan(vec!["host", "job"], Some("60s"));
         let result = correlate_normalized(
@@ -534,12 +595,14 @@ mod tests {
 
     #[test]
     fn correlate_normalized_skew_tolerance() {
-        let metrics = make_normalized_result("metrics", vec![
-            make_normalized_row(Some(1000.0), vec![("host", "a")], None),
-        ]);
-        let logs = make_normalized_result("logs", vec![
-            make_normalized_row(Some(1070.0), vec![("host", "a")], None),
-        ]);
+        let metrics = make_normalized_result(
+            "metrics",
+            vec![make_normalized_row(Some(1000.0), vec![("host", "a")], None)],
+        );
+        let logs = make_normalized_result(
+            "logs",
+            vec![make_normalized_row(Some(1070.0), vec![("host", "a")], None)],
+        );
 
         // 60s window + 15s skew = 75s total — entry at 1070 is within 75s of 1000
         let mut plan = make_correlation_plan(vec!["host"], Some("60s"));
@@ -566,12 +629,14 @@ mod tests {
 
     #[test]
     fn correlate_normalized_no_timestamps_match_by_field() {
-        let metrics = make_normalized_result("metrics", vec![
-            make_normalized_row(None, vec![("host", "a")], None),
-        ]);
-        let logs = make_normalized_result("logs", vec![
-            make_normalized_row(None, vec![("host", "a")], None),
-        ]);
+        let metrics = make_normalized_result(
+            "metrics",
+            vec![make_normalized_row(None, vec![("host", "a")], None)],
+        );
+        let logs = make_normalized_result(
+            "logs",
+            vec![make_normalized_row(None, vec![("host", "a")], None)],
+        );
 
         let plan = make_correlation_plan(vec!["host"], Some("60s"));
         let result = correlate_normalized(
@@ -584,12 +649,14 @@ mod tests {
 
     #[test]
     fn correlate_normalized_default_time_window() {
-        let metrics = make_normalized_result("metrics", vec![
-            make_normalized_row(Some(1000.0), vec![("host", "a")], None),
-        ]);
-        let logs = make_normalized_result("logs", vec![
-            make_normalized_row(Some(1050.0), vec![("host", "a")], None),
-        ]);
+        let metrics = make_normalized_result(
+            "metrics",
+            vec![make_normalized_row(Some(1000.0), vec![("host", "a")], None)],
+        );
+        let logs = make_normalized_result(
+            "logs",
+            vec![make_normalized_row(Some(1050.0), vec![("host", "a")], None)],
+        );
 
         // No time_window → defaults to 60s
         let plan = make_correlation_plan(vec!["host"], None);
@@ -604,34 +671,50 @@ mod tests {
     fn correlate_normalized_one_side_missing_timestamp_skipped() {
         // One side has timestamp, other doesn't → should NOT match
         // This prevents false positive correlations from unparseable timestamps
-        let metrics = make_normalized_result("metrics", vec![
-            make_normalized_row(Some(1000.0), vec![("host", "a")], Some("10")),
-        ]);
-        let logs = make_normalized_result("logs", vec![
-            make_normalized_row(None, vec![("host", "a")], Some("log")),
-        ]);
+        let metrics = make_normalized_result(
+            "metrics",
+            vec![make_normalized_row(
+                Some(1000.0),
+                vec![("host", "a")],
+                Some("10"),
+            )],
+        );
+        let logs = make_normalized_result(
+            "logs",
+            vec![make_normalized_row(None, vec![("host", "a")], Some("log"))],
+        );
 
         let plan = make_correlation_plan(vec!["host"], Some("60s"));
         let result = correlate_normalized(
             &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
             &plan,
         );
-        assert_eq!(result.events.len(), 0, "One-sided missing timestamp should not match");
+        assert_eq!(
+            result.events.len(),
+            0,
+            "One-sided missing timestamp should not match"
+        );
     }
 
     #[test]
     fn correlate_legacy_one_side_missing_timestamp_skipped() {
-        let metrics = make_backend_result("prometheus", serde_json::json!({
-            "data": {"result": [
-                {"metric": {"host": "srv-01"}, "value": [1000.0, "42"]}
-            ]}
-        }));
+        let metrics = make_backend_result(
+            "prometheus",
+            serde_json::json!({
+                "data": {"result": [
+                    {"metric": {"host": "srv-01"}, "value": [1000.0, "42"]}
+                ]}
+            }),
+        );
         // Log with no _time field → timestamp_epoch = None
-        let logs = make_backend_result("victorialogs", serde_json::json!({
-            "result": [
-                {"host": "srv-01", "_msg": "error"}
-            ]
-        }));
+        let logs = make_backend_result(
+            "victorialogs",
+            serde_json::json!({
+                "result": [
+                    {"host": "srv-01", "_msg": "error"}
+                ]
+            }),
+        );
 
         let plan = make_correlation_plan(vec!["host"], Some("60s"));
         let result = correlate(
@@ -639,7 +722,11 @@ mod tests {
             &plan,
         );
         // Metrics have epoch from value[0]=1000, logs have None → should skip
-        assert_eq!(result.events.len(), 0, "One-sided missing timestamp should not match");
+        assert_eq!(
+            result.events.len(),
+            0,
+            "One-sided missing timestamp should not match"
+        );
     }
 
     #[test]
@@ -663,22 +750,31 @@ mod tests {
             &[("metrics".to_string(), metrics), ("logs".to_string(), logs)],
             &plan,
         );
-        assert!(result.events.len() <= super::MAX_CORRELATED_EVENTS,
-            "Should be capped at {}, got {}", super::MAX_CORRELATED_EVENTS, result.events.len());
+        assert!(
+            result.events.len() <= super::MAX_CORRELATED_EVENTS,
+            "Should be capped at {}, got {}",
+            super::MAX_CORRELATED_EVENTS,
+            result.events.len()
+        );
     }
 
     #[test]
     fn correlate_normalized_unknown_signal_treated_as_logs() {
-        let metrics = make_normalized_result("metrics", vec![
-            make_normalized_row(Some(1000.0), vec![("host", "a")], None),
-        ]);
-        let unknown = make_normalized_result("traces", vec![
-            make_normalized_row(Some(1000.0), vec![("host", "a")], None),
-        ]);
+        let metrics = make_normalized_result(
+            "metrics",
+            vec![make_normalized_row(Some(1000.0), vec![("host", "a")], None)],
+        );
+        let unknown = make_normalized_result(
+            "traces",
+            vec![make_normalized_row(Some(1000.0), vec![("host", "a")], None)],
+        );
 
         let plan = make_correlation_plan(vec!["host"], Some("60s"));
         let result = correlate_normalized(
-            &[("metrics".to_string(), metrics), ("traces".to_string(), unknown)],
+            &[
+                ("metrics".to_string(), metrics),
+                ("traces".to_string(), unknown),
+            ],
             &plan,
         );
         // "traces" should be treated as logs
@@ -696,14 +792,16 @@ pub fn correlate_normalized(
     let mut logs_entries: Vec<FlatEntry> = Vec::new();
 
     for (signal_type, normalized) in results {
-        let entries: Vec<FlatEntry> = normalized.rows.iter().map(|row| {
-            FlatEntry {
+        let entries: Vec<FlatEntry> = normalized
+            .rows
+            .iter()
+            .map(|row| FlatEntry {
                 timestamp: row.timestamp.clone(),
                 timestamp_epoch: row.timestamp_epoch,
                 fields: row.labels.clone(),
                 raw: row.raw.clone(),
-            }
-        }).collect();
+            })
+            .collect();
 
         match signal_type.as_str() {
             "metrics" => metrics_entries.extend(entries),
@@ -712,11 +810,15 @@ pub fn correlate_normalized(
         }
     }
 
-    let window_secs = plan.time_window.as_ref()
+    let window_secs = plan
+        .time_window
+        .as_ref()
         .map(|w| parse_duration_secs(w))
         .unwrap_or(60.0);
 
-    let skew_secs = plan.skew_tolerance.as_ref()
+    let skew_secs = plan
+        .skew_tolerance
+        .as_ref()
         .map(|s| parse_duration_secs(s))
         .unwrap_or(0.0);
 
@@ -725,7 +827,8 @@ pub fn correlate_normalized(
     // ── Hash-Partitioned Time-Windowed Join ────────────────────────────
     // Phase 1: Build hash map from smaller side (metrics) keyed by join fields
     let build_key = |entry: &FlatEntry| -> String {
-        plan.join_fields.iter()
+        plan.join_fields
+            .iter()
             .map(|f| entry.fields.get(f).map(|v| v.as_str()).unwrap_or(""))
             .collect::<Vec<_>>()
             .join("\x00") // null separator for composite key
@@ -741,7 +844,8 @@ pub fn correlate_normalized(
     // Phase 2: Sort each bucket by timestamp for binary search
     for bucket in metrics_map.values_mut() {
         bucket.sort_by(|a, b| {
-            a.timestamp_epoch.unwrap_or(0.0)
+            a.timestamp_epoch
+                .unwrap_or(0.0)
                 .partial_cmp(&b.timestamp_epoch.unwrap_or(0.0))
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
@@ -752,7 +856,9 @@ pub fn correlate_normalized(
 
     for l in &logs_entries {
         let key = build_key(l);
-        let Some(bucket) = metrics_map.get(&key) else { continue };
+        let Some(bucket) = metrics_map.get(&key) else {
+            continue;
+        };
 
         let log_ts = l.timestamp_epoch.unwrap_or(0.0);
 
@@ -761,22 +867,24 @@ pub fn correlate_normalized(
         let hi = log_ts + total_window;
 
         // Find first entry >= lo
-        let start_idx = bucket.partition_point(|e| {
-            e.timestamp_epoch.unwrap_or(0.0) < lo
-        });
+        let start_idx = bucket.partition_point(|e| e.timestamp_epoch.unwrap_or(0.0) < lo);
 
         for m in &bucket[start_idx..] {
             let m_ts = m.timestamp_epoch.unwrap_or(0.0);
-            if m_ts > hi { break; } // past window, done
+            if m_ts > hi {
+                break;
+            } // past window, done
 
             // Require both timestamps for time-based matching.
             let time_ok = match (m.timestamp_epoch, l.timestamp_epoch) {
                 (Some(_), Some(_)) => true, // already within window from binary search
-                (None, None) => true, // both missing → field-only match
-                _ => false, // one side missing → skip (prevents false positives)
+                (None, None) => true,       // both missing → field-only match
+                _ => false,                 // one side missing → skip (prevents false positives)
             };
 
-            if !time_ok { continue; }
+            if !time_ok {
+                continue;
+            }
 
             let mut join_fields = serde_json::Map::new();
             for f in &plan.join_fields {

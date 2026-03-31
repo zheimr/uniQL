@@ -82,7 +82,8 @@ impl QueryCache {
 
         // Evict oldest if at capacity
         if entries.len() >= self.max_entries {
-            if let Some(oldest_key) = entries.iter()
+            if let Some(oldest_key) = entries
+                .iter()
                 .min_by_key(|(_, e)| e.inserted_at)
                 .map(|(k, _)| k.clone())
             {
@@ -90,15 +91,18 @@ impl QueryCache {
             }
         }
 
-        entries.insert(query.to_string(), CacheEntry {
-            data,
-            native_query: native_query.to_string(),
-            backend: backend.to_string(),
-            backend_type: backend_type.to_string(),
-            signal_type: signal_type.to_string(),
-            inserted_at: Instant::now(),
-            ttl: self.default_ttl,
-        });
+        entries.insert(
+            query.to_string(),
+            CacheEntry {
+                data,
+                native_query: native_query.to_string(),
+                backend: backend.to_string(),
+                backend_type: backend_type.to_string(),
+                signal_type: signal_type.to_string(),
+                inserted_at: Instant::now(),
+                ttl: self.default_ttl,
+            },
+        );
     }
 
     /// Cache statistics.
@@ -106,16 +110,22 @@ impl QueryCache {
         let entries = self.entries.read().await;
         let total = entries.len();
         let expired = entries.values().filter(|e| e.is_expired()).count();
-        CacheStats { total, active: total - expired, expired }
+        CacheStats {
+            total,
+            active: total - expired,
+            expired,
+        }
     }
 
     /// Clear all entries.
+    #[allow(dead_code)]
     pub async fn clear(&self) {
         self.entries.write().await.clear();
     }
 }
 
 pub struct CacheStats {
+    #[allow(dead_code)]
     pub total: usize,
     pub active: usize,
     pub expired: usize,
@@ -128,8 +138,16 @@ mod tests {
     #[tokio::test]
     async fn cache_put_and_get() {
         let cache = QueryCache::new(100, 60);
-        cache.put("FROM metrics WHERE __name__ = \"up\"",
-            serde_json::json!({"result": []}), "up", "victoria", "prometheus", "metrics").await;
+        cache
+            .put(
+                "FROM metrics WHERE __name__ = \"up\"",
+                serde_json::json!({"result": []}),
+                "up",
+                "victoria",
+                "prometheus",
+                "metrics",
+            )
+            .await;
 
         let result = cache.get("FROM metrics WHERE __name__ = \"up\"").await;
         assert!(result.is_some());

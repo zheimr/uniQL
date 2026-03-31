@@ -1,4 +1,6 @@
-use super::{BackendResult, ExecutionError, MAX_RETRIES, RETRY_DELAY_MS, is_retryable_reqwest_error};
+use super::{
+    is_retryable_reqwest_error, BackendResult, ExecutionError, MAX_RETRIES, RETRY_DELAY_MS,
+};
 use reqwest::Client;
 use std::time::Instant;
 
@@ -52,9 +54,9 @@ impl VictoriaLogsExecutor {
             params.push(("end", end.to_string()));
         }
 
-        let resp = self.send_with_retry(|| {
-            self.client.get(&url).query(&params)
-        }).await?;
+        let resp = self
+            .send_with_retry(|| self.client.get(&url).query(&params))
+            .await?;
 
         let status = resp.status();
         let body_text = resp.text().await.map_err(|e| ExecutionError {
@@ -110,7 +112,10 @@ impl VictoriaLogsExecutor {
     }
 
     /// Send an HTTP request with retry on transient failures.
-    async fn send_with_retry<F>(&self, build_request: F) -> Result<reqwest::Response, ExecutionError>
+    async fn send_with_retry<F>(
+        &self,
+        build_request: F,
+    ) -> Result<reqwest::Response, ExecutionError>
     where
         F: Fn() -> reqwest::RequestBuilder,
     {
@@ -138,7 +143,11 @@ impl VictoriaLogsExecutor {
             }
         }
         Err(ExecutionError {
-            message: format!("HTTP request failed after {} retries: {}", MAX_RETRIES, last_err.unwrap()),
+            message: format!(
+                "HTTP request failed after {} retries: {}",
+                MAX_RETRIES,
+                last_err.unwrap()
+            ),
             backend: self.name.clone(),
         })
     }
@@ -147,7 +156,7 @@ impl VictoriaLogsExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::{MockServer, Mock, matchers, ResponseTemplate};
+    use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
     async fn query_success_ndjson() {
@@ -261,7 +270,15 @@ not-json
     #[tokio::test]
     async fn query_large_result() {
         let server = MockServer::start().await;
-        let lines: Vec<String> = (0..200).map(|i| format!(r#"{{"_msg":"log {}","_time":"2026-03-18T10:00:{:02}Z"}}"#, i, i % 60)).collect();
+        let lines: Vec<String> = (0..200)
+            .map(|i| {
+                format!(
+                    r#"{{"_msg":"log {}","_time":"2026-03-18T10:00:{:02}Z"}}"#,
+                    i,
+                    i % 60
+                )
+            })
+            .collect();
         Mock::given(matchers::path("/select/logsql/query"))
             .respond_with(ResponseTemplate::new(200).set_body_string(lines.join("\n")))
             .mount(&server)
@@ -282,7 +299,10 @@ not-json
             .await;
 
         let exec = VictoriaLogsExecutor::new("my-vlogs", &server.uri());
-        let result = exec.query("_stream:{job=\"api\"}", 50, "-10m").await.unwrap();
+        let result = exec
+            .query("_stream:{job=\"api\"}", 50, "-10m")
+            .await
+            .unwrap();
         assert_eq!(result.backend_name, "my-vlogs");
         assert_eq!(result.backend_type, "victorialogs");
         assert_eq!(result.native_query, "_stream:{job=\"api\"}");

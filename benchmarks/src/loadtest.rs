@@ -4,7 +4,6 @@
 /// - 1, 10, 50, 100 concurrent clients
 /// - Measures throughput, p50/p95/p99 latency, error rate
 /// - Reports CPU/memory if available
-
 mod corpus;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,6 +14,7 @@ const ENGINE_URL: &str = "http://localhost:9090";
 const TEST_DURATION_SECS: u64 = 10;
 const CONCURRENCY_LEVELS: &[usize] = &[1, 10, 50, 100];
 
+#[allow(dead_code)]
 struct LoadResult {
     concurrency: usize,
     total_requests: u64,
@@ -27,7 +27,8 @@ struct LoadResult {
 #[tokio::main]
 async fn main() {
     let queries = corpus::corpus();
-    let query_pool: Vec<String> = queries.iter()
+    let query_pool: Vec<String> = queries
+        .iter()
         .map(|q| serde_json::json!({"query": q.query, "limit": 5}).to_string())
         .collect();
 
@@ -44,15 +45,23 @@ async fn main() {
     let client = reqwest::Client::new();
     let health: serde_json::Value = client
         .get(format!("{}/health", ENGINE_URL))
-        .send().await.expect("Engine unreachable")
-        .json().await.unwrap();
+        .send()
+        .await
+        .expect("Engine unreachable")
+        .json()
+        .await
+        .unwrap();
     println!("  Engine: {} v{}", health["status"], health["version"]);
     println!();
 
-    println!("  {:>5}  {:>8}  {:>6}  {:>8}  {:>8}  {:>8}  {:>6}  {:>8}",
-        "CONC", "TOTAL", "ERR", "RPS", "p50", "p95", "p99", "MAX");
-    println!("  {:>5}  {:>8}  {:>6}  {:>8}  {:>8}  {:>8}  {:>6}  {:>8}",
-        "", "reqs", "%", "req/s", "ms", "ms", "ms", "ms");
+    println!(
+        "  {:>5}  {:>8}  {:>6}  {:>8}  {:>8}  {:>8}  {:>6}  {:>8}",
+        "CONC", "TOTAL", "ERR", "RPS", "p50", "p95", "p99", "MAX"
+    );
+    println!(
+        "  {:>5}  {:>8}  {:>6}  {:>8}  {:>8}  {:>8}  {:>6}  {:>8}",
+        "", "reqs", "%", "req/s", "ms", "ms", "ms", "ms"
+    );
     println!("  {}", "-".repeat(70));
 
     let mut all_results = Vec::new();
@@ -63,16 +72,25 @@ async fn main() {
         let rps = result.total_requests as f64 / (result.duration_ms as f64 / 1000.0);
         let err_pct = if result.total_requests > 0 {
             result.errors as f64 / result.total_requests as f64 * 100.0
-        } else { 0.0 };
+        } else {
+            0.0
+        };
 
         let p50 = percentile_us(&result.latencies_us, 50);
         let p95 = percentile_us(&result.latencies_us, 95);
         let p99 = percentile_us(&result.latencies_us, 99);
         let max = result.latencies_us.iter().max().copied().unwrap_or(0);
 
-        println!("  {:>5}  {:>8}  {:>5.1}%  {:>8.1}  {:>7.1}  {:>7.1}  {:>5.1}  {:>7.1}",
-            concurrency, result.total_requests, err_pct, rps,
-            p50 as f64 / 1000.0, p95 as f64 / 1000.0, p99 as f64 / 1000.0, max as f64 / 1000.0,
+        println!(
+            "  {:>5}  {:>8}  {:>5.1}%  {:>8.1}  {:>7.1}  {:>7.1}  {:>5.1}  {:>7.1}",
+            concurrency,
+            result.total_requests,
+            err_pct,
+            rps,
+            p50 as f64 / 1000.0,
+            p95 as f64 / 1000.0,
+            p99 as f64 / 1000.0,
+            max as f64 / 1000.0,
         );
 
         all_results.push(result);
@@ -93,8 +111,10 @@ async fn main() {
         let conc_ratio = last.concurrency as f64 / first.concurrency.max(1) as f64;
         let latency_ratio = last_p50 / first_p50.max(0.001);
 
-        println!("  Concurrency {}x → {}x → latency {:.1}x",
-            first.concurrency, last.concurrency, latency_ratio);
+        println!(
+            "  Concurrency {}x → {}x → latency {:.1}x",
+            first.concurrency, last.concurrency, latency_ratio
+        );
 
         if latency_ratio < conc_ratio * 0.5 {
             println!("  \x1b[32mSub-linear scaling: good parallelism\x1b[0m");
@@ -139,7 +159,8 @@ async fn run_load_test(concurrency: usize, query_pool: &[String]) -> LoadResult 
                 idx += concurrency;
 
                 let start = Instant::now();
-                let result = client.post(format!("{}/v1/query", ENGINE_URL))
+                let result = client
+                    .post(format!("{}/v1/query", ENGINE_URL))
                     .header("Content-Type", "application/json")
                     .body(query_body.clone())
                     .send()
@@ -182,7 +203,9 @@ async fn run_load_test(concurrency: usize, query_pool: &[String]) -> LoadResult 
 }
 
 fn percentile_us(data: &[u64], pct: u32) -> u64 {
-    if data.is_empty() { return 0; }
+    if data.is_empty() {
+        return 0;
+    }
     let mut sorted = data.to_vec();
     sorted.sort();
     let idx = ((pct as f64 / 100.0) * (sorted.len() - 1) as f64).round() as usize;

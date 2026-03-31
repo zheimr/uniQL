@@ -39,7 +39,9 @@ pub fn validate(query: &Query) -> Result<Vec<SemanticWarning>, SemanticError> {
     // Rule 1: PARSE is only valid for log sources
     if query.parse.is_some()
         && !signals.is_empty()
-        && !signals.iter().any(|s| matches!(s, SignalType::Logs | SignalType::Unknown(_)))
+        && !signals
+            .iter()
+            .any(|s| matches!(s, SignalType::Logs | SignalType::Unknown(_)))
     {
         return Err(SemanticError {
             message: "PARSE is only valid for log sources".to_string(),
@@ -85,11 +87,15 @@ pub fn validate(query: &Query) -> Result<Vec<SemanticWarning>, SemanticError> {
     if let Some(ref compute) = query.compute {
         for func in &compute.functions {
             let fname = func.name.to_lowercase();
-            if (fname == "rate" || fname == "irate" || fname == "increase") && signals.iter().all(|s| matches!(s, SignalType::Logs)) {
+            if (fname == "rate" || fname == "irate" || fname == "increase")
+                && signals.iter().all(|s| matches!(s, SignalType::Logs))
+            {
                 // Check if first arg is "count" — that's valid for logs
-                let first_arg_is_count = func.args.first().map(|a| {
-                    matches!(a, Expr::Ident(name) if name.to_lowercase() == "count")
-                }).unwrap_or(false);
+                let first_arg_is_count = func
+                    .args
+                    .first()
+                    .map(|a| matches!(a, Expr::Ident(name) if name.to_lowercase() == "count"))
+                    .unwrap_or(false);
 
                 if !first_arg_is_count && !func.args.is_empty() {
                     warnings.push(SemanticWarning {
@@ -120,7 +126,11 @@ pub fn validate(query: &Query) -> Result<Vec<SemanticWarning>, SemanticError> {
 /// Check if an expression contains OR between conditions on different fields.
 fn has_cross_field_or(expr: &Expr) -> bool {
     match expr {
-        Expr::BinaryOp { op: BinaryOp::Or, left, right } => {
+        Expr::BinaryOp {
+            op: BinaryOp::Or,
+            left,
+            right,
+        } => {
             let left_field = extract_top_field(left);
             let right_field = extract_top_field(right);
             match (left_field, right_field) {
@@ -128,9 +138,11 @@ fn has_cross_field_or(expr: &Expr) -> bool {
                 _ => true, // can't determine fields → warn
             }
         }
-        Expr::BinaryOp { op: BinaryOp::And, left, right } => {
-            has_cross_field_or(left) || has_cross_field_or(right)
-        }
+        Expr::BinaryOp {
+            op: BinaryOp::And,
+            left,
+            right,
+        } => has_cross_field_or(left) || has_cross_field_or(right),
         _ => false,
     }
 }
@@ -144,13 +156,15 @@ fn extract_top_field(expr: &Expr) -> Option<String> {
                 _ => None,
             }
         }
-        Expr::BinaryOp { op: BinaryOp::And, left, .. } => extract_top_field(left),
-        Expr::StringMatch { expr: inner, .. } => {
-            match inner.as_ref() {
-                Expr::Ident(name) => Some(name.clone()),
-                _ => None,
-            }
-        }
+        Expr::BinaryOp {
+            op: BinaryOp::And,
+            left,
+            ..
+        } => extract_top_field(left),
+        Expr::StringMatch { expr: inner, .. } => match inner.as_ref() {
+            Expr::Ident(name) => Some(name.clone()),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -178,24 +192,20 @@ mod tests {
     #[test]
     fn test_valid_metric_query() {
         let result = validate_query(
-            "FROM metrics WHERE __name__ = \"http_requests_total\" COMPUTE rate(value, 5m)"
+            "FROM metrics WHERE __name__ = \"http_requests_total\" COMPUTE rate(value, 5m)",
         );
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_valid_log_query() {
-        let result = validate_query(
-            "FROM logs WHERE service = \"api\" PARSE json"
-        );
+        let result = validate_query("FROM logs WHERE service = \"api\" PARSE json");
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_parse_on_metrics_fails() {
-        let result = validate_query(
-            "FROM metrics WHERE service = \"api\" PARSE json"
-        );
+        let result = validate_query("FROM metrics WHERE service = \"api\" PARSE json");
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.message.contains("PARSE is only valid for log sources"));
@@ -203,9 +213,7 @@ mod tests {
 
     #[test]
     fn test_multi_signal_without_correlate_fails() {
-        let result = validate_query(
-            "FROM metrics, logs WHERE service = \"api\""
-        );
+        let result = validate_query("FROM metrics, logs WHERE service = \"api\"");
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.message.contains("CORRELATE"));
@@ -214,16 +222,14 @@ mod tests {
     #[test]
     fn test_multi_signal_with_correlate_ok() {
         let result = validate_query(
-            "FROM metrics, logs WHERE service = \"api\" CORRELATE ON service WITHIN 30s"
+            "FROM metrics, logs WHERE service = \"api\" CORRELATE ON service WITHIN 30s",
         );
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_flamegraph_on_metrics_fails() {
-        let result = validate_query(
-            "FROM metrics SHOW flamegraph"
-        );
+        let result = validate_query("FROM metrics SHOW flamegraph");
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.message.contains("flamegraph"));
@@ -231,9 +237,7 @@ mod tests {
 
     #[test]
     fn test_rate_on_logs_warns() {
-        let result = validate_query(
-            "FROM logs WHERE service = \"api\" COMPUTE rate(value, 5m)"
-        );
+        let result = validate_query("FROM logs WHERE service = \"api\" COMPUTE rate(value, 5m)");
         assert!(result.is_ok());
         let warnings = result.unwrap();
         assert!(!warnings.is_empty());
@@ -241,31 +245,34 @@ mod tests {
 
     #[test]
     fn test_cross_field_or_warns() {
-        let result = validate_query(
-            "FROM metrics WHERE service = \"api\" OR env = \"prod\""
-        );
+        let result = validate_query("FROM metrics WHERE service = \"api\" OR env = \"prod\"");
         assert!(result.is_ok());
         let warnings = result.unwrap();
-        assert!(!warnings.is_empty(), "Cross-field OR should produce a warning");
-        assert!(warnings[0].message.contains("OR"), "Warning should mention OR");
+        assert!(
+            !warnings.is_empty(),
+            "Cross-field OR should produce a warning"
+        );
+        assert!(
+            warnings[0].message.contains("OR"),
+            "Warning should mention OR"
+        );
     }
 
     #[test]
     fn test_same_field_or_no_warning() {
-        let result = validate_query(
-            "FROM metrics WHERE service = \"api\" OR service = \"web\""
-        );
+        let result = validate_query("FROM metrics WHERE service = \"api\" OR service = \"web\"");
         assert!(result.is_ok());
         let warnings = result.unwrap();
-        let or_warnings: Vec<_> = warnings.iter().filter(|w| w.message.contains("OR")).collect();
+        let or_warnings: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.message.contains("OR"))
+            .collect();
         assert!(or_warnings.is_empty(), "Same-field OR should not warn");
     }
 
     #[test]
     fn test_rate_count_on_logs_no_warning() {
-        let result = validate_query(
-            "FROM logs WHERE service = \"api\" COMPUTE rate(count, 5m)"
-        );
+        let result = validate_query("FROM logs WHERE service = \"api\" COMPUTE rate(count, 5m)");
         assert!(result.is_ok());
         let warnings = result.unwrap();
         assert!(warnings.is_empty());

@@ -12,10 +12,7 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum ParseError {
     #[error("Expected {expected}, found {found:?}")]
-    Expected {
-        expected: String,
-        found: TokenKind,
-    },
+    Expected { expected: String, found: TokenKind },
 
     #[error("Unexpected token {token:?}")]
     Unexpected { token: TokenKind },
@@ -40,7 +37,11 @@ pub struct Parser {
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, depth: 0 }
+        Parser {
+            tokens,
+            pos: 0,
+            depth: 0,
+        }
     }
 
     fn peek(&self) -> &TokenKind {
@@ -111,7 +112,7 @@ impl Parser {
                 // |> pipe syntax: consume pipe arrow, next token must be a clause keyword
                 TokenKind::PipeArrow => {
                     self.advance(); // consume |>
-                    // Next iteration will parse the clause keyword
+                                    // Next iteration will parse the clause keyword
                 }
                 _ => {
                     return Err(ParseError::Unexpected {
@@ -409,9 +410,10 @@ impl Parser {
         self.advance(); // consume SHOW
         let format_name = self.expect_ident()?;
 
-        let format = ShowFormat::parse_format(&format_name).ok_or(ParseError::UnknownShowFormat {
-            format: format_name,
-        })?;
+        let format =
+            ShowFormat::parse_format(&format_name).ok_or(ParseError::UnknownShowFormat {
+                format: format_name,
+            })?;
 
         Ok(ShowClause { format })
     }
@@ -421,7 +423,9 @@ impl Parser {
     fn parse_expr(&mut self, min_bp: u8) -> Result<Expr, ParseError> {
         self.depth += 1;
         if self.depth > crate::config::MAX_EXPR_DEPTH {
-            return Err(ParseError::MaxDepthExceeded { max: crate::config::MAX_EXPR_DEPTH });
+            return Err(ParseError::MaxDepthExceeded {
+                max: crate::config::MAX_EXPR_DEPTH,
+            });
         }
         let result = self.parse_expr_inner(min_bp);
         self.depth -= 1;
@@ -783,9 +787,7 @@ mod tests {
         let q = parse_query("FROM metrics WHERE service IN [\"nginx\", \"envoy\", \"haproxy\"]");
         let wc = q.where_clause.unwrap();
         match wc.condition {
-            Expr::InList {
-                list, negated, ..
-            } => {
+            Expr::InList { list, negated, .. } => {
                 assert_eq!(list.len(), 3);
                 assert!(!negated);
             }
@@ -833,7 +835,8 @@ mod tests {
 
     #[test]
     fn test_having() {
-        let q = parse_query("FROM metrics COMPUTE rate(value, 5m) GROUP BY service HAVING rate > 0.01");
+        let q =
+            parse_query("FROM metrics COMPUTE rate(value, 5m) GROUP BY service HAVING rate > 0.01");
         let having = q.having.unwrap();
         match having.condition {
             Expr::BinaryOp { op, .. } => assert_eq!(op, BinaryOp::Gt),
@@ -843,9 +846,7 @@ mod tests {
 
     #[test]
     fn test_correlate() {
-        let q = parse_query(
-            "FROM metrics, logs CORRELATE ON service, host WITHIN 30s",
-        );
+        let q = parse_query("FROM metrics, logs CORRELATE ON service, host WITHIN 30s");
         let corr = q.correlate.unwrap();
         assert_eq!(corr.on_fields, vec!["service", "host"]);
         assert_eq!(corr.within, Some("30s".into()));
@@ -941,9 +942,7 @@ mod tests {
 
     #[test]
     fn test_pipe_syntax_basic() {
-        let q = parse_query(
-            "FROM metrics |> WHERE service = \"nginx\" |> SHOW timeseries",
-        );
+        let q = parse_query("FROM metrics |> WHERE service = \"nginx\" |> SHOW timeseries");
         assert!(q.from.is_some());
         assert!(q.where_clause.is_some());
         assert!(q.show.is_some());
@@ -976,9 +975,8 @@ mod tests {
 
     #[test]
     fn test_pipe_and_sql_produce_same_ast() {
-        let sql_q = parse_query(
-            "FROM metrics WHERE service = \"nginx\" WITHIN last 5m SHOW timeseries",
-        );
+        let sql_q =
+            parse_query("FROM metrics WHERE service = \"nginx\" WITHIN last 5m SHOW timeseries");
         let pipe_q = parse_query(
             "FROM metrics |> WHERE service = \"nginx\" |> WITHIN last 5m |> SHOW timeseries",
         );
@@ -1002,7 +1000,8 @@ mod tests {
         let err = result.unwrap_err();
         assert!(
             matches!(err, ParseError::MaxDepthExceeded { .. }),
-            "Expected MaxDepthExceeded, got: {:?}", err
+            "Expected MaxDepthExceeded, got: {:?}",
+            err
         );
     }
 

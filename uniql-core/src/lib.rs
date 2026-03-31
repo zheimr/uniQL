@@ -40,19 +40,29 @@ impl std::fmt::Display for UniqlError {
 impl std::error::Error for UniqlError {}
 
 impl From<lexer::LexError> for UniqlError {
-    fn from(e: lexer::LexError) -> Self { UniqlError::Lex(e) }
+    fn from(e: lexer::LexError) -> Self {
+        UniqlError::Lex(e)
+    }
 }
 impl From<parser::ParseError> for UniqlError {
-    fn from(e: parser::ParseError) -> Self { UniqlError::Parse(e) }
+    fn from(e: parser::ParseError) -> Self {
+        UniqlError::Parse(e)
+    }
 }
 impl From<expand::ExpandError> for UniqlError {
-    fn from(e: expand::ExpandError) -> Self { UniqlError::Expand(e) }
+    fn from(e: expand::ExpandError) -> Self {
+        UniqlError::Expand(e)
+    }
 }
 impl From<semantic::SemanticError> for UniqlError {
-    fn from(e: semantic::SemanticError) -> Self { UniqlError::Semantic(e) }
+    fn from(e: semantic::SemanticError) -> Self {
+        UniqlError::Semantic(e)
+    }
 }
 impl From<transpiler::TranspileError> for UniqlError {
-    fn from(e: transpiler::TranspileError) -> Self { UniqlError::Transpile(e) }
+    fn from(e: transpiler::TranspileError) -> Self {
+        UniqlError::Transpile(e)
+    }
 }
 
 // ─── Public API (typed errors) ───────────────────────────────────────────────
@@ -158,7 +168,10 @@ mod tests {
     fn test_query_too_large() {
         let huge = "a".repeat(config::MAX_QUERY_SIZE + 1);
         let result = parse(&huge);
-        assert!(matches!(result, Err(UniqlError::Parse(parser::ParseError::QueryTooLarge { .. }))));
+        assert!(matches!(
+            result,
+            Err(UniqlError::Parse(parser::ParseError::QueryTooLarge { .. }))
+        ));
     }
 
     #[test]

@@ -1,10 +1,10 @@
-pub mod query;
-pub mod validate;
 pub mod explain;
 pub mod health;
 pub mod investigate;
 pub mod metrics;
+pub mod query;
 pub mod schema;
+pub mod validate;
 
 use serde::{Deserialize, Serialize};
 
@@ -17,8 +17,12 @@ pub struct QueryRequest {
     pub limit: u32,
 }
 
-fn default_format() -> String { "json".to_string() }
-fn default_limit() -> u32 { 100 }
+fn default_format() -> String {
+    "json".to_string()
+}
+fn default_limit() -> u32 {
+    100
+}
 
 #[derive(Debug, Serialize)]
 pub struct QueryResponse {

@@ -6,10 +6,10 @@
 //!
 //! LogsQL reference: https://docs.victoriametrics.com/victorialogs/logsql/
 
+use super::{BackendType, TranspileError, TranspileOutput, Transpiler};
 use crate::ast::*;
 use crate::bind::{self, BoundCondition, BoundOrGroup};
 use crate::normalize::NormalizedQuery;
-use super::{Transpiler, TranspileOutput, TranspileError, BackendType};
 
 // ─── Trait Implementation ─────────────────────────────────────────────────────
 
@@ -120,10 +120,12 @@ pub fn transpile(query: &Query) -> Result<String, TranspileError> {
         for source in &from.sources {
             match source.signal_type {
                 SignalType::Logs | SignalType::Unknown(_) => {}
-                ref other => return Err(TranspileError::UnsupportedSignalType {
-                    backend: "logsql".to_string(),
-                    signal: other.clone(),
-                }),
+                ref other => {
+                    return Err(TranspileError::UnsupportedSignalType {
+                        backend: "logsql".to_string(),
+                        signal: other.clone(),
+                    })
+                }
             }
         }
     }
@@ -153,7 +155,9 @@ pub fn transpile(query: &Query) -> Result<String, TranspileError> {
                 builder.pipe_stages.push(format!("extract \"{}\"", pat));
             }
             ParseMode::Regexp(pat) => {
-                builder.pipe_stages.push(format!("extract_regexp \"{}\"", pat));
+                builder
+                    .pipe_stages
+                    .push(format!("extract_regexp \"{}\"", pat));
             }
         }
     }
@@ -162,7 +166,8 @@ pub fn transpile(query: &Query) -> Result<String, TranspileError> {
     if let Some(ref compute) = query.compute {
         if compute.functions.len() > 1 {
             return Err(TranspileError::UnsupportedExpression(
-                "LogsQL supports only one aggregation per query. Split into multiple queries.".to_string()
+                "LogsQL supports only one aggregation per query. Split into multiple queries."
+                    .to_string(),
             ));
         }
         if let Some(func) = compute.functions.first() {
@@ -204,12 +209,12 @@ pub fn transpile(query: &Query) -> Result<String, TranspileError> {
 
             // Build stats pipe with GROUP BY
             if let Some(ref gb) = query.group_by {
-                let group_fields: Vec<String> = gb.fields.iter()
-                    .map(expr_to_field_name)
-                    .collect();
-                builder.pipe_stages.push(
-                    format!("stats by ({}) {}", group_fields.join(", "), stats_func)
-                );
+                let group_fields: Vec<String> = gb.fields.iter().map(expr_to_field_name).collect();
+                builder.pipe_stages.push(format!(
+                    "stats by ({}) {}",
+                    group_fields.join(", "),
+                    stats_func
+                ));
             } else {
                 builder.pipe_stages.push(format!("stats {}", stats_func));
             }
@@ -256,7 +261,10 @@ fn having_value(expr: &Expr) -> String {
     }
 }
 
-fn extract_logsql_conditions(expr: &Expr, builder: &mut LogsQLBuilder) -> Result<(), TranspileError> {
+fn extract_logsql_conditions(
+    expr: &Expr,
+    builder: &mut LogsQLBuilder,
+) -> Result<(), TranspileError> {
     match expr {
         Expr::BinaryOp {
             left,
@@ -279,7 +287,9 @@ fn extract_logsql_conditions(expr: &Expr, builder: &mut LogsQLBuilder) -> Result
             extract_logsql_conditions(right, &mut right_builder)?;
             let left_q = left_builder.build();
             let right_q = right_builder.build();
-            builder.field_filters.push(format!("({} or {})", left_q, right_q));
+            builder
+                .field_filters
+                .push(format!("({} or {})", left_q, right_q));
         }
 
         Expr::BinaryOp { left, op, right } => {
@@ -291,19 +301,29 @@ fn extract_logsql_conditions(expr: &Expr, builder: &mut LogsQLBuilder) -> Result
                     // Stream field → goes inside _stream:{...}
                     match op {
                         BinaryOp::Eq => {
-                            builder.stream_filters.push(format!("{}=\"{}\"", label, value));
+                            builder
+                                .stream_filters
+                                .push(format!("{}=\"{}\"", label, value));
                         }
                         BinaryOp::Neq => {
-                            builder.stream_filters.push(format!("{}!=\"{}\"", label, value));
+                            builder
+                                .stream_filters
+                                .push(format!("{}!=\"{}\"", label, value));
                         }
                         BinaryOp::RegexMatch => {
-                            builder.stream_filters.push(format!("{}=~\"{}\"", label, value));
+                            builder
+                                .stream_filters
+                                .push(format!("{}=~\"{}\"", label, value));
                         }
                         BinaryOp::RegexNoMatch => {
-                            builder.stream_filters.push(format!("{}!~\"{}\"", label, value));
+                            builder
+                                .stream_filters
+                                .push(format!("{}!~\"{}\"", label, value));
                         }
                         _ => {
-                            builder.field_filters.push(format!("{}:\"{}\"", label, value));
+                            builder
+                                .field_filters
+                                .push(format!("{}:\"{}\"", label, value));
                         }
                     }
                 } else if label == "level" || label == "log.level" || label == "severity" {
@@ -331,7 +351,9 @@ fn extract_logsql_conditions(expr: &Expr, builder: &mut LogsQLBuilder) -> Result
                             builder.field_filters.push(format!("{}:<={}", label, value));
                         }
                         BinaryOp::RegexMatch => {
-                            builder.field_filters.push(format!("{}:re({})", label, value));
+                            builder
+                                .field_filters
+                                .push(format!("{}:re({})", label, value));
                         }
                         _ => {
                             builder.field_filters.push(format!("{}:{}", label, value));
@@ -361,13 +383,19 @@ fn extract_logsql_conditions(expr: &Expr, builder: &mut LogsQLBuilder) -> Result
                     // Field-level string match
                     match op {
                         StringMatchOp::Contains => {
-                            builder.field_filters.push(format!("{}:\"{}\"", label, pattern));
+                            builder
+                                .field_filters
+                                .push(format!("{}:\"{}\"", label, pattern));
                         }
                         StringMatchOp::Matches => {
-                            builder.field_filters.push(format!("{}:re(\"{}\")", label, pattern));
+                            builder
+                                .field_filters
+                                .push(format!("{}:re(\"{}\")", label, pattern));
                         }
                         StringMatchOp::StartsWith => {
-                            builder.field_filters.push(format!("{}:re(\"^{}\")", label, pattern));
+                            builder
+                                .field_filters
+                                .push(format!("{}:re(\"^{}\")", label, pattern));
                         }
                     }
                 }
@@ -383,9 +411,20 @@ fn extract_logsql_conditions(expr: &Expr, builder: &mut LogsQLBuilder) -> Result
 fn is_stream_field(name: &str) -> bool {
     matches!(
         name,
-        "job" | "service" | "namespace" | "container" | "pod" | "host"
-        | "instance" | "env" | "environment" | "cluster" | "region"
-        | "app" | "component" | "device_type"
+        "job"
+            | "service"
+            | "namespace"
+            | "container"
+            | "pod"
+            | "host"
+            | "instance"
+            | "env"
+            | "environment"
+            | "cluster"
+            | "region"
+            | "app"
+            | "component"
+            | "device_type"
     )
 }
 
@@ -433,10 +472,12 @@ fn transpile_from_normalized(nq: &NormalizedQuery) -> Result<String, TranspileEr
         for source in &from.sources {
             match source.signal_type {
                 SignalType::Logs | SignalType::Unknown(_) => {}
-                ref other => return Err(TranspileError::UnsupportedSignalType {
-                    backend: "logsql".to_string(),
-                    signal: other.clone(),
-                }),
+                ref other => {
+                    return Err(TranspileError::UnsupportedSignalType {
+                        backend: "logsql".to_string(),
+                        signal: other.clone(),
+                    })
+                }
             }
         }
     }
@@ -458,76 +499,104 @@ fn transpile_from_normalized(nq: &NormalizedQuery) -> Result<String, TranspileEr
                     bind::BoundOp::RegexNoMatch => "!~",
                     _ => "=",
                 };
-                builder.stream_filters.push(format!("{}{}\"{}\"", name, op_str, value));
+                builder
+                    .stream_filters
+                    .push(format!("{}{}\"{}\"", name, op_str, value));
             }
             BoundCondition::FieldFilter { name, op, value } => {
                 if name == "level" || name == "log.level" || name == "severity" {
                     builder.field_filters.push(format!("{}:{}", name, value));
                 } else {
                     match op {
-                        bind::BoundOp::Eq => builder.field_filters.push(format!("{}:{}", name, value)),
-                        bind::BoundOp::Neq => builder.field_filters.push(format!("-{}:{}", name, value)),
-                        bind::BoundOp::Gt => builder.field_filters.push(format!("{}:>{}", name, value)),
-                        bind::BoundOp::Gte => builder.field_filters.push(format!("{}:>={}", name, value)),
-                        bind::BoundOp::Lt => builder.field_filters.push(format!("{}:<{}", name, value)),
-                        bind::BoundOp::Lte => builder.field_filters.push(format!("{}:<={}", name, value)),
-                        bind::BoundOp::RegexMatch => builder.field_filters.push(format!("{}:re({})", name, value)),
+                        bind::BoundOp::Eq => {
+                            builder.field_filters.push(format!("{}:{}", name, value))
+                        }
+                        bind::BoundOp::Neq => {
+                            builder.field_filters.push(format!("-{}:{}", name, value))
+                        }
+                        bind::BoundOp::Gt => {
+                            builder.field_filters.push(format!("{}:>{}", name, value))
+                        }
+                        bind::BoundOp::Gte => {
+                            builder.field_filters.push(format!("{}:>={}", name, value))
+                        }
+                        bind::BoundOp::Lt => {
+                            builder.field_filters.push(format!("{}:<{}", name, value))
+                        }
+                        bind::BoundOp::Lte => {
+                            builder.field_filters.push(format!("{}:<={}", name, value))
+                        }
+                        bind::BoundOp::RegexMatch => builder
+                            .field_filters
+                            .push(format!("{}:re({})", name, value)),
                         _ => builder.field_filters.push(format!("{}:{}", name, value)),
                     }
                 }
             }
-            BoundCondition::ContentFilter { match_op, pattern } => {
-                match match_op {
-                    StringMatchOp::Contains => {
-                        builder.msg_filters.push(format!("\"{}\"", pattern));
-                    }
-                    StringMatchOp::Matches => {
-                        builder.msg_filters.push(format!("re(\"{}\")", pattern));
-                    }
-                    StringMatchOp::StartsWith => {
-                        builder.msg_filters.push(format!("re(\"^{}\")", pattern));
-                    }
+            BoundCondition::ContentFilter { match_op, pattern } => match match_op {
+                StringMatchOp::Contains => {
+                    builder.msg_filters.push(format!("\"{}\"", pattern));
                 }
-            }
+                StringMatchOp::Matches => {
+                    builder.msg_filters.push(format!("re(\"{}\")", pattern));
+                }
+                StringMatchOp::StartsWith => {
+                    builder.msg_filters.push(format!("re(\"^{}\")", pattern));
+                }
+            },
             BoundCondition::OrGroup(BoundOrGroup { field, values }) => {
                 // OR → build "or" expression
-                let parts: Vec<String> = values.iter().map(|v| {
-                    if bind::is_stream_label(field) {
-                        format!("_stream:{{{}=\"{}\"}}", field, v)
-                    } else {
-                        format!("{}:{}", field, v)
-                    }
-                }).collect();
-                builder.field_filters.push(format!("({})", parts.join(" or ")));
+                let parts: Vec<String> = values
+                    .iter()
+                    .map(|v| {
+                        if bind::is_stream_label(field) {
+                            format!("_stream:{{{}=\"{}\"}}", field, v)
+                        } else {
+                            format!("{}:{}", field, v)
+                        }
+                    })
+                    .collect();
+                builder
+                    .field_filters
+                    .push(format!("({})", parts.join(" or ")));
             }
-            BoundCondition::FieldStringMatch { name, match_op, pattern } => {
-                match match_op {
-                    StringMatchOp::Contains => {
-                        builder.field_filters.push(format!("{}:\"{}\"", name, pattern));
-                    }
-                    StringMatchOp::Matches => {
-                        builder.field_filters.push(format!("{}:re(\"{}\")", name, pattern));
-                    }
-                    StringMatchOp::StartsWith => {
-                        builder.field_filters.push(format!("{}:re(\"^{}\")", name, pattern));
-                    }
+            BoundCondition::FieldStringMatch {
+                name,
+                match_op,
+                pattern,
+            } => match match_op {
+                StringMatchOp::Contains => {
+                    builder
+                        .field_filters
+                        .push(format!("{}:\"{}\"", name, pattern));
                 }
-            }
-            BoundCondition::MetricName(_) | BoundCondition::InList { .. } | BoundCondition::CrossFieldOr { .. } => {
+                StringMatchOp::Matches => {
+                    builder
+                        .field_filters
+                        .push(format!("{}:re(\"{}\")", name, pattern));
+                }
+                StringMatchOp::StartsWith => {
+                    builder
+                        .field_filters
+                        .push(format!("{}:re(\"^{}\")", name, pattern));
+                }
+            },
+            BoundCondition::MetricName(_)
+            | BoundCondition::InList { .. }
+            | BoundCondition::CrossFieldOr { .. } => {
                 // Not applicable to LogsQL
             }
-            BoundCondition::Native { backend, query } => {
-                match backend.as_deref() {
-                    None | Some("logsql") | Some("victorialogs") | Some("vlogs") => {
-                        builder.field_filters.push(query.clone());
-                    }
-                    Some(other) => {
-                        return Err(TranspileError::UnsupportedExpression(
-                            format!("NATIVE('{}', ...) cannot be transpiled to LogsQL", other),
-                        ));
-                    }
+            BoundCondition::Native { backend, query } => match backend.as_deref() {
+                None | Some("logsql") | Some("victorialogs") | Some("vlogs") => {
+                    builder.field_filters.push(query.clone());
                 }
-            }
+                Some(other) => {
+                    return Err(TranspileError::UnsupportedExpression(format!(
+                        "NATIVE('{}', ...) cannot be transpiled to LogsQL",
+                        other
+                    )));
+                }
+            },
         }
     }
 
@@ -542,7 +611,9 @@ fn transpile_from_normalized(nq: &NormalizedQuery) -> Result<String, TranspileEr
             ParseMode::Json => builder.pipe_stages.push("unpack_json".to_string()),
             ParseMode::Logfmt => builder.pipe_stages.push("unpack_logfmt".to_string()),
             ParseMode::Pattern(pat) => builder.pipe_stages.push(format!("extract \"{}\"", pat)),
-            ParseMode::Regexp(pat) => builder.pipe_stages.push(format!("extract_regexp \"{}\"", pat)),
+            ParseMode::Regexp(pat) => builder
+                .pipe_stages
+                .push(format!("extract_regexp \"{}\"", pat)),
         }
     }
 
@@ -616,9 +687,11 @@ fn transpile_from_normalized(nq: &NormalizedQuery) -> Result<String, TranspileEr
 
         // Build stats pipe with GROUP BY (uses normalized labels)
         if !nq.group_by_labels.is_empty() {
-            builder.pipe_stages.push(
-                format!("stats by ({}) {}", nq.group_by_labels.join(", "), stats_func)
-            );
+            builder.pipe_stages.push(format!(
+                "stats by ({}) {}",
+                nq.group_by_labels.join(", "),
+                stats_func
+            ));
         } else {
             builder.pipe_stages.push(format!("stats {}", stats_func));
         }
@@ -638,7 +711,9 @@ fn transpile_from_normalized(nq: &NormalizedQuery) -> Result<String, TranspileEr
             }
         } else if !having.op.is_empty() {
             // Simple HAVING — use aggregate function ref
-            let stats_ref = having.aggregate_func.as_deref()
+            let stats_ref = having
+                .aggregate_func
+                .as_deref()
                 .map(|f| match f {
                     "count" | "count_over_time" => "count()".to_string(),
                     "sum" => "sum()".to_string(),
@@ -691,73 +766,64 @@ mod tests {
 
     #[test]
     fn test_simple_stream_filter() {
-        let result = transpile_query(
-            "FROM logs WHERE service = \"api\""
-        ).unwrap();
+        let result = transpile_query("FROM logs WHERE service = \"api\"").unwrap();
         assert_eq!(result, "_stream:{service=\"api\"}");
     }
 
     #[test]
     fn test_message_contains() {
-        let result = transpile_query(
-            "FROM logs WHERE service = \"api\" AND message CONTAINS \"error\""
-        ).unwrap();
+        let result =
+            transpile_query("FROM logs WHERE service = \"api\" AND message CONTAINS \"error\"")
+                .unwrap();
         assert_eq!(result, "_stream:{service=\"api\"} \"error\"");
     }
 
     #[test]
     fn test_message_regex() {
         let result = transpile_query(
-            "FROM logs WHERE service = \"api\" AND message MATCHES \"error.*timeout\""
-        ).unwrap();
+            "FROM logs WHERE service = \"api\" AND message MATCHES \"error.*timeout\"",
+        )
+        .unwrap();
         assert_eq!(result, "_stream:{service=\"api\"} re(\"error.*timeout\")");
     }
 
     #[test]
     fn test_multiple_stream_filters() {
-        let result = transpile_query(
-            "FROM logs WHERE service = \"api\" AND host = \"prod-01\""
-        ).unwrap();
+        let result =
+            transpile_query("FROM logs WHERE service = \"api\" AND host = \"prod-01\"").unwrap();
         assert_eq!(result, "_stream:{service=\"api\", host=\"prod-01\"}");
     }
 
     #[test]
     fn test_with_time_filter() {
-        let result = transpile_query(
-            "FROM logs WHERE service = \"api\" WITHIN last 5m"
-        ).unwrap();
+        let result = transpile_query("FROM logs WHERE service = \"api\" WITHIN last 5m").unwrap();
         assert!(result.contains("_time:5m"));
     }
 
     #[test]
     fn test_json_parse() {
-        let result = transpile_query(
-            "FROM logs WHERE service = \"api\" PARSE json"
-        ).unwrap();
+        let result = transpile_query("FROM logs WHERE service = \"api\" PARSE json").unwrap();
         assert!(result.contains("| unpack_json"));
     }
 
     #[test]
     fn test_stats_count() {
-        let result = transpile_query(
-            "FROM logs WHERE service = \"api\" COMPUTE count()"
-        ).unwrap();
+        let result = transpile_query("FROM logs WHERE service = \"api\" COMPUTE count()").unwrap();
         assert!(result.contains("| stats count()"));
     }
 
     #[test]
     fn test_stats_group_by() {
-        let result = transpile_query(
-            "FROM logs WHERE service = \"api\" COMPUTE count() GROUP BY level"
-        ).unwrap();
+        let result =
+            transpile_query("FROM logs WHERE service = \"api\" COMPUTE count() GROUP BY level")
+                .unwrap();
         assert!(result.contains("| stats by (level) count()"));
     }
 
     #[test]
     fn test_level_filter() {
-        let result = transpile_query(
-            "FROM logs WHERE service = \"api\" AND level = \"error\""
-        ).unwrap();
+        let result =
+            transpile_query("FROM logs WHERE service = \"api\" AND level = \"error\"").unwrap();
         assert!(result.contains("_stream:{service=\"api\"}"));
         assert!(result.contains("level:error"));
     }
@@ -771,16 +837,18 @@ mod tests {
     #[test]
     fn test_aetheris_syslog() {
         let result = transpile_query(
-            "FROM logs WHERE service = \"syslog-collector\" AND message CONTAINS \"link down\""
-        ).unwrap();
-        assert_eq!(result, "_stream:{service=\"syslog-collector\"} \"link down\"");
+            "FROM logs WHERE service = \"syslog-collector\" AND message CONTAINS \"link down\"",
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            "_stream:{service=\"syslog-collector\"} \"link down\""
+        );
     }
 
     #[test]
     fn test_negation_filter() {
-        let result = transpile_query(
-            "FROM logs WHERE service != \"debug-service\""
-        ).unwrap();
+        let result = transpile_query("FROM logs WHERE service != \"debug-service\"").unwrap();
         assert_eq!(result, "_stream:{service!=\"debug-service\"}");
     }
 
@@ -829,7 +897,7 @@ mod tests {
     #[test]
     fn test_mirror_syslog() {
         assert_mirror(
-            "FROM logs WHERE service = \"syslog-collector\" AND message CONTAINS \"link down\""
+            "FROM logs WHERE service = \"syslog-collector\" AND message CONTAINS \"link down\"",
         );
     }
 
@@ -850,8 +918,9 @@ mod tests {
         // Bug fix: old path hardcoded "count(*)" in having_value;
         // normalized path uses actual aggregate function name.
         let nq = crate::prepare_normalized(
-            "FROM logs WHERE service = \"api\" COMPUTE count() GROUP BY level HAVING count > 100"
-        ).unwrap();
+            "FROM logs WHERE service = \"api\" COMPUTE count() GROUP BY level HAVING count > 100",
+        )
+        .unwrap();
         let result = transpile_from_normalized(&nq).unwrap();
         // Should reference "count()" not "count(*)"
         assert!(result.contains("filter \"count()\""), "Got: {}", result);
@@ -909,16 +978,18 @@ mod tests {
     #[test]
     fn test_parse_pattern() {
         let result = transpile_query(
-            "FROM logs WHERE service = \"api\" PARSE pattern \"<ip> - <method> <path>\""
-        ).unwrap();
+            "FROM logs WHERE service = \"api\" PARSE pattern \"<ip> - <method> <path>\"",
+        )
+        .unwrap();
         assert!(result.contains("| extract"), "Got: {}", result);
     }
 
     #[test]
     fn test_parse_regexp() {
         let result = transpile_query(
-            "FROM logs WHERE service = \"api\" PARSE regexp \"(?P<status>\\\\d{3})\""
-        ).unwrap();
+            "FROM logs WHERE service = \"api\" PARSE regexp \"(?P<status>\\\\d{3})\"",
+        )
+        .unwrap();
         assert!(result.contains("| extract_regexp"), "Got: {}", result);
     }
 
@@ -926,70 +997,72 @@ mod tests {
 
     #[test]
     fn test_compute_sum() {
-        let result = transpile_query(
-            "FROM logs WHERE service = \"api\" COMPUTE sum(bytes)"
-        ).unwrap();
+        let result =
+            transpile_query("FROM logs WHERE service = \"api\" COMPUTE sum(bytes)").unwrap();
         assert!(result.contains("| stats sum(bytes)"), "Got: {}", result);
     }
 
     #[test]
     fn test_compute_avg() {
-        let result = transpile_query(
-            "FROM logs WHERE service = \"api\" COMPUTE avg(duration)"
-        ).unwrap();
+        let result =
+            transpile_query("FROM logs WHERE service = \"api\" COMPUTE avg(duration)").unwrap();
         assert!(result.contains("| stats avg(duration)"), "Got: {}", result);
     }
 
     #[test]
     fn test_compute_min_max() {
-        let min_result = transpile_query(
-            "FROM logs WHERE service = \"api\" COMPUTE min(latency)"
-        ).unwrap();
-        assert!(min_result.contains("| stats min(latency)"), "Got: {}", min_result);
+        let min_result =
+            transpile_query("FROM logs WHERE service = \"api\" COMPUTE min(latency)").unwrap();
+        assert!(
+            min_result.contains("| stats min(latency)"),
+            "Got: {}",
+            min_result
+        );
 
-        let max_result = transpile_query(
-            "FROM logs WHERE service = \"api\" COMPUTE max(latency)"
-        ).unwrap();
-        assert!(max_result.contains("| stats max(latency)"), "Got: {}", max_result);
+        let max_result =
+            transpile_query("FROM logs WHERE service = \"api\" COMPUTE max(latency)").unwrap();
+        assert!(
+            max_result.contains("| stats max(latency)"),
+            "Got: {}",
+            max_result
+        );
     }
 
     #[test]
     fn test_compute_rate() {
-        let result = transpile_query(
-            "FROM logs WHERE service = \"api\" COMPUTE rate(value)"
-        ).unwrap();
-        assert!(result.contains("| stats count()"), "Rate approximated as count. Got: {}", result);
+        let result =
+            transpile_query("FROM logs WHERE service = \"api\" COMPUTE rate(value)").unwrap();
+        assert!(
+            result.contains("| stats count()"),
+            "Rate approximated as count. Got: {}",
+            result
+        );
     }
 
     #[test]
     fn test_or_condition() {
-        let result = transpile_query(
-            "FROM logs WHERE (service = \"api\" OR service = \"web\")"
-        ).unwrap();
+        let result =
+            transpile_query("FROM logs WHERE (service = \"api\" OR service = \"web\")").unwrap();
         assert!(result.contains("or"), "Got: {}", result);
     }
 
     #[test]
     fn test_field_greater_than() {
-        let result = transpile_query(
-            "FROM logs WHERE status = \"500\""
-        ).unwrap();
+        let result = transpile_query("FROM logs WHERE status = \"500\"").unwrap();
         assert!(result.contains("status:500"), "Got: {}", result);
     }
 
     #[test]
     fn test_regex_match_in_stream() {
-        let result = transpile_query(
-            "FROM logs WHERE service =~ \"api.*\""
-        ).unwrap();
+        let result = transpile_query("FROM logs WHERE service =~ \"api.*\"").unwrap();
         assert!(result.contains("=~"), "Got: {}", result);
     }
 
     #[test]
     fn test_message_starts_with() {
-        let result = transpile_query(
-            "FROM logs WHERE service = \"api\" AND message STARTS WITH \"ERROR\""
-        ).unwrap();
+        let result =
+            transpile_query("FROM logs WHERE service = \"api\" AND message STARTS WITH \"ERROR\"")
+                .unwrap();
         assert!(result.contains("re(\"^ERROR\")"), "Got: {}", result);
     }
 
@@ -998,17 +1071,17 @@ mod tests {
     #[test]
     fn test_native_in_logsql() {
         let result = transpile_normalized_query(
-            "FROM logs WHERE service = \"api\" AND NATIVE(\"status_code:>=500\")"
-        ).unwrap();
+            "FROM logs WHERE service = \"api\" AND NATIVE(\"status_code:>=500\")",
+        )
+        .unwrap();
         assert!(result.contains("service=\"api\""), "Got: {}", result);
         assert!(result.contains("status_code:>=500"), "Got: {}", result);
     }
 
     #[test]
     fn test_native_wrong_backend_logsql() {
-        let result = transpile_normalized_query(
-            "FROM logs WHERE NATIVE(\"promql\", \"up{job='api'}\")"
-        );
+        let result =
+            transpile_normalized_query("FROM logs WHERE NATIVE(\"promql\", \"up{job='api'}\")");
         assert!(result.is_err());
     }
 }

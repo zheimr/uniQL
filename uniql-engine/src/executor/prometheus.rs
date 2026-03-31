@@ -1,4 +1,6 @@
-use super::{BackendResult, ExecutionError, MAX_RETRIES, RETRY_DELAY_MS, is_retryable_reqwest_error};
+use super::{
+    is_retryable_reqwest_error, BackendResult, ExecutionError, MAX_RETRIES, RETRY_DELAY_MS,
+};
 use reqwest::Client;
 use std::time::Instant;
 
@@ -27,9 +29,9 @@ impl PrometheusExecutor {
         let url = format!("{}/api/v1/query", self.base_url);
         let start = Instant::now();
 
-        let resp = self.send_with_retry(|| {
-            self.client.get(&url).query(&[("query", promql)])
-        }).await?;
+        let resp = self
+            .send_with_retry(|| self.client.get(&url).query(&[("query", promql)]))
+            .await?;
 
         let status = resp.status();
         let body: serde_json::Value = resp.json().await.map_err(|e| ExecutionError {
@@ -64,14 +66,16 @@ impl PrometheusExecutor {
         let url = format!("{}/api/v1/query_range", self.base_url);
         let start = Instant::now();
 
-        let resp = self.send_with_retry(|| {
-            self.client.get(&url).query(&[
-                ("query", promql),
-                ("start", start_ts),
-                ("end", end_ts),
-                ("step", step),
-            ])
-        }).await?;
+        let resp = self
+            .send_with_retry(|| {
+                self.client.get(&url).query(&[
+                    ("query", promql),
+                    ("start", start_ts),
+                    ("end", end_ts),
+                    ("step", step),
+                ])
+            })
+            .await?;
 
         let body: serde_json::Value = resp.json().await.map_err(|e| ExecutionError {
             message: format!("Failed to parse response: {}", e),
@@ -97,12 +101,16 @@ impl PrometheusExecutor {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn with_base_url(name: &str, base_url: &str) -> Self {
         Self::new(name, base_url)
     }
 
     /// Send an HTTP request with retry on transient failures.
-    async fn send_with_retry<F>(&self, build_request: F) -> Result<reqwest::Response, ExecutionError>
+    async fn send_with_retry<F>(
+        &self,
+        build_request: F,
+    ) -> Result<reqwest::Response, ExecutionError>
     where
         F: Fn() -> reqwest::RequestBuilder,
     {
@@ -130,7 +138,11 @@ impl PrometheusExecutor {
             }
         }
         Err(ExecutionError {
-            message: format!("HTTP request failed after {} retries: {}", MAX_RETRIES, last_err.unwrap()),
+            message: format!(
+                "HTTP request failed after {} retries: {}",
+                MAX_RETRIES,
+                last_err.unwrap()
+            ),
             backend: self.name.clone(),
         })
     }
@@ -139,7 +151,7 @@ impl PrometheusExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::{MockServer, Mock, matchers, ResponseTemplate};
+    use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
     async fn query_instant_success() {
@@ -272,10 +284,14 @@ mod tests {
     #[tokio::test]
     async fn query_large_result_set() {
         let server = MockServer::start().await;
-        let large_result: Vec<serde_json::Value> = (0..500).map(|i| serde_json::json!({
-            "metric": {"__name__": "up", "instance": format!("host-{}", i)},
-            "value": [1000, "1"]
-        })).collect();
+        let large_result: Vec<serde_json::Value> = (0..500)
+            .map(|i| {
+                serde_json::json!({
+                    "metric": {"__name__": "up", "instance": format!("host-{}", i)},
+                    "value": [1000, "1"]
+                })
+            })
+            .collect();
         Mock::given(matchers::path("/api/v1/query"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "status": "success",
@@ -316,7 +332,10 @@ mod tests {
             .await;
 
         let exec = PrometheusExecutor::new("prom", &server.uri());
-        let result = exec.query_range("rate(up[5m])", "-1h", "now", "15s").await.unwrap();
+        let result = exec
+            .query_range("rate(up[5m])", "-1h", "now", "15s")
+            .await
+            .unwrap();
         assert_eq!(result.native_query, "rate(up[5m])");
         assert_eq!(result.backend_name, "prom");
     }

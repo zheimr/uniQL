@@ -3,9 +3,9 @@
 //! Trait-based transpiler interface. Each backend implements the Transpiler trait.
 //! Available backends: PromQL (Prometheus/VictoriaMetrics), LogsQL (VictoriaLogs), LogQL (Loki).
 
-pub mod promql;
-pub mod logsql;
 pub mod logql;
+pub mod logsql;
+pub mod promql;
 
 use crate::ast::{Query, SignalType};
 
@@ -61,10 +61,7 @@ pub trait Transpiler: Send + Sync {
 #[derive(Debug, thiserror::Error)]
 pub enum TranspileError {
     #[error("Backend '{backend}' does not support signal type '{signal:?}'")]
-    UnsupportedSignalType {
-        backend: String,
-        signal: SignalType,
-    },
+    UnsupportedSignalType { backend: String, signal: SignalType },
 
     #[error("CORRELATE is not supported by single-backend transpilers. Use the execution engine.")]
     CorrelateNotSupported,
@@ -87,12 +84,8 @@ pub fn get_transpiler(name: &str) -> Option<Box<dyn Transpiler>> {
         "promql" | "metricsql" | "prometheus" | "victoria" => {
             Some(Box::new(promql::PromQLTranspiler))
         }
-        "logsql" | "victorialogs" | "vlogs" => {
-            Some(Box::new(logsql::LogsQLTranspiler))
-        }
-        "logql" | "loki" => {
-            Some(Box::new(logql::LogQLTranspiler))
-        }
+        "logsql" | "victorialogs" | "vlogs" => Some(Box::new(logsql::LogsQLTranspiler)),
+        "logql" | "loki" => Some(Box::new(logql::LogQLTranspiler)),
         _ => None,
     }
 }

@@ -4,8 +4,8 @@
 //! can be scraped by VictoriaMetrics/Prometheus.
 
 use axum::extract::State;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use crate::engine::AppState;
 
@@ -29,9 +29,7 @@ impl EngineMetrics {
 }
 
 /// GET /metrics — Prometheus exposition format
-pub async fn handle_metrics(
-    State(state): State<Arc<AppState>>,
-) -> String {
+pub async fn handle_metrics(State(state): State<Arc<AppState>>) -> String {
     let cache_stats = state.cache.stats().await;
     let m = &state.metrics;
 
@@ -40,19 +38,31 @@ pub async fn handle_metrics(
     // Query counters
     out.push_str("# HELP uniql_queries_total Total queries processed\n");
     out.push_str("# TYPE uniql_queries_total counter\n");
-    out.push_str(&format!("uniql_queries_total {}\n", m.queries_total.load(Ordering::Relaxed)));
+    out.push_str(&format!(
+        "uniql_queries_total {}\n",
+        m.queries_total.load(Ordering::Relaxed)
+    ));
 
     out.push_str("# HELP uniql_queries_cached Total cache hits\n");
     out.push_str("# TYPE uniql_queries_cached counter\n");
-    out.push_str(&format!("uniql_queries_cached {}\n", m.queries_cached.load(Ordering::Relaxed)));
+    out.push_str(&format!(
+        "uniql_queries_cached {}\n",
+        m.queries_cached.load(Ordering::Relaxed)
+    ));
 
     out.push_str("# HELP uniql_queries_errors Total query errors\n");
     out.push_str("# TYPE uniql_queries_errors counter\n");
-    out.push_str(&format!("uniql_queries_errors {}\n", m.queries_errors.load(Ordering::Relaxed)));
+    out.push_str(&format!(
+        "uniql_queries_errors {}\n",
+        m.queries_errors.load(Ordering::Relaxed)
+    ));
 
     out.push_str("# HELP uniql_investigate_total Total investigation packs run\n");
     out.push_str("# TYPE uniql_investigate_total counter\n");
-    out.push_str(&format!("uniql_investigate_total {}\n", m.investigate_total.load(Ordering::Relaxed)));
+    out.push_str(&format!(
+        "uniql_investigate_total {}\n",
+        m.investigate_total.load(Ordering::Relaxed)
+    ));
 
     // Cache gauges
     out.push_str("# HELP uniql_cache_entries Current cache entries\n");
@@ -66,8 +76,10 @@ pub async fn handle_metrics(
     // Engine info
     out.push_str("# HELP uniql_info Engine information\n");
     out.push_str("# TYPE uniql_info gauge\n");
-    out.push_str(&format!("uniql_info{{version=\"0.3.0\",backends=\"{}\"}} 1\n",
-        state.config.backends.len()));
+    out.push_str(&format!(
+        "uniql_info{{version=\"0.3.0\",backends=\"{}\"}} 1\n",
+        state.config.backends.len()
+    ));
 
     out
 }
@@ -75,8 +87,8 @@ pub async fn handle_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::EngineConfig;
     use crate::cache::QueryCache;
+    use crate::config::EngineConfig;
     use axum::extract::State;
 
     fn make_state() -> Arc<AppState> {

@@ -14,10 +14,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use super::ErrorResponse;
 use crate::engine::AppState;
 use crate::executor::{prometheus::PrometheusExecutor, victorialogs::VictoriaLogsExecutor};
 use crate::planner;
-use super::ErrorResponse;
 
 // ─── Request / Response ──────────────────────────────────────────────────────
 
@@ -153,9 +153,10 @@ mod tests {
 
     #[test]
     fn substitute_single_param() {
-        let result = substitute_params("WHERE host = \"$host\"", &HashMap::from([
-            ("host".to_string(), "srv-01".to_string()),
-        ]));
+        let result = substitute_params(
+            "WHERE host = \"$host\"",
+            &HashMap::from([("host".to_string(), "srv-01".to_string())]),
+        );
         assert_eq!(result, "WHERE host = \"srv-01\"");
     }
 
@@ -199,7 +200,11 @@ mod tests {
     fn high_cpu_queries_use_host_param() {
         let queries = get_pack_queries("high_cpu").unwrap();
         for (_, query) in &queries {
-            assert!(query.contains("$host"), "Query should contain $host: {}", query);
+            assert!(
+                query.contains("$host"),
+                "Query should contain $host: {}",
+                query
+            );
         }
     }
 
@@ -207,14 +212,20 @@ mod tests {
     fn error_spike_queries_use_service_param() {
         let queries = get_pack_queries("error_spike").unwrap();
         let has_service = queries.iter().any(|(_, q)| q.contains("$service"));
-        assert!(has_service, "At least one error_spike query should use $service");
+        assert!(
+            has_service,
+            "At least one error_spike query should use $service"
+        );
     }
 
     #[test]
     fn link_down_has_firewall_logs() {
         let queries = get_pack_queries("link_down").unwrap();
         let has_vlogs = queries.iter().any(|(_, q)| q.contains("vlogs"));
-        assert!(has_vlogs, "link_down should include VLogs query for firewall logs");
+        assert!(
+            has_vlogs,
+            "link_down should include VLogs query for firewall logs"
+        );
     }
 
     #[test]
@@ -233,7 +244,12 @@ mod tests {
 
     #[test]
     fn all_packs_have_3_queries() {
-        for pack in &["high_cpu", "error_spike", "latency_degradation", "link_down"] {
+        for pack in &[
+            "high_cpu",
+            "error_spike",
+            "latency_degradation",
+            "link_down",
+        ] {
             let queries = get_pack_queries(pack).unwrap();
             assert_eq!(queries.len(), 3, "Pack '{}' should have 3 queries", pack);
         }
@@ -241,11 +257,21 @@ mod tests {
 
     #[test]
     fn all_packs_have_unique_query_names() {
-        for pack in &["high_cpu", "error_spike", "latency_degradation", "link_down"] {
+        for pack in &[
+            "high_cpu",
+            "error_spike",
+            "latency_degradation",
+            "link_down",
+        ] {
             let queries = get_pack_queries(pack).unwrap();
             let names: Vec<&str> = queries.iter().map(|(n, _)| *n).collect();
             let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
-            assert_eq!(names.len(), unique.len(), "Pack '{}' has duplicate query names", pack);
+            assert_eq!(
+                names.len(),
+                unique.len(),
+                "Pack '{}' has duplicate query names",
+                pack
+            );
         }
     }
 
@@ -270,8 +296,16 @@ mod tests {
     #[test]
     fn sanitize_strips_quotes() {
         let result = sanitize_param_value(r#"" OR service = "nginx"#);
-        assert!(!result.contains('"'), "Quotes should be stripped: {}", result);
-        assert!(!result.contains('='), "Operators should be stripped: {}", result);
+        assert!(
+            !result.contains('"'),
+            "Quotes should be stripped: {}",
+            result
+        );
+        assert!(
+            !result.contains('='),
+            "Operators should be stripped: {}",
+            result
+        );
     }
 
     #[test]
@@ -307,7 +341,11 @@ mod tests {
         params.insert("host".to_string(), r#"" OR service = "nginx"#.to_string());
         let result = substitute_params("WHERE host = \"$host\"", &params);
         // Dangerous chars (quotes, =, \) stripped, only safe chars remain
-        assert!(!result.contains(r#"""#) || result.ends_with('"'), "No unmatched quotes: {}", result);
+        assert!(
+            !result.contains(r#"""#) || result.ends_with('"'),
+            "No unmatched quotes: {}",
+            result
+        );
         // The sanitized value should not contain query operators
         let sanitized = sanitize_param_value(r#"" OR service = "nginx"#);
         assert!(!sanitized.contains('"'));
@@ -317,10 +355,20 @@ mod tests {
     #[test]
     fn all_pack_queries_contain_within() {
         // All AETHERIS packs should have WITHIN for time-bounded queries
-        for pack in &["high_cpu", "error_spike", "latency_degradation", "link_down"] {
+        for pack in &[
+            "high_cpu",
+            "error_spike",
+            "latency_degradation",
+            "link_down",
+        ] {
             let queries = get_pack_queries(pack).unwrap();
             for (name, query) in &queries {
-                assert!(query.contains("WITHIN"), "Pack '{}' query '{}' missing WITHIN clause", pack, name);
+                assert!(
+                    query.contains("WITHIN"),
+                    "Pack '{}' query '{}' missing WITHIN clause",
+                    pack,
+                    name
+                );
             }
         }
     }
@@ -328,7 +376,12 @@ mod tests {
     #[test]
     fn pack_queries_are_valid_uniql() {
         // All pack templates (with params substituted) should be parseable
-        let packs = vec!["high_cpu", "error_spike", "latency_degradation", "link_down"];
+        let packs = vec![
+            "high_cpu",
+            "error_spike",
+            "latency_degradation",
+            "link_down",
+        ];
         let mut params = HashMap::new();
         params.insert("host".to_string(), "test-host".to_string());
         params.insert("service".to_string(), "test-service".to_string());
@@ -338,7 +391,14 @@ mod tests {
             for (name, tmpl) in &queries {
                 let query = substitute_params(tmpl, &params);
                 let result = uniql_core::parse(&query);
-                assert!(result.is_ok(), "Pack '{}' query '{}' failed to parse: {:?}\nQuery: {}", pack, name, result.err(), query);
+                assert!(
+                    result.is_ok(),
+                    "Pack '{}' query '{}' failed to parse: {:?}\nQuery: {}",
+                    pack,
+                    name,
+                    result.err(),
+                    query
+                );
             }
         }
     }
@@ -354,7 +414,9 @@ pub async fn handle_investigate(
 
     // Resolve queries: built-in pack or custom
     let named_queries: Vec<(String, String)> = if req.pack == "custom" {
-        req.queries.iter().enumerate()
+        req.queries
+            .iter()
+            .enumerate()
             .map(|(i, q)| (format!("query_{}", i + 1), q.clone()))
             .collect()
     } else {
@@ -366,112 +428,124 @@ pub async fn handle_investigate(
             }))
         })?;
 
-        pack_templates.into_iter()
+        pack_templates
+            .into_iter()
             .map(|(name, tmpl)| (name.to_string(), substitute_params(tmpl, &req.params)))
             .collect()
     };
 
     // Execute all queries in parallel
-    let futures: Vec<_> = named_queries.into_iter().map(|(name, query)| {
-        let state = state.clone();
-        async move {
-            let start = Instant::now();
+    let futures: Vec<_> = named_queries
+        .into_iter()
+        .map(|(name, query)| {
+            let state = state.clone();
+            async move {
+                let start = Instant::now();
 
-            // Parse + plan
-            let ast = match uniql_core::prepare(&query) {
-                Ok(ast) => ast,
-                Err(e) => {
-                    return InvestigateResult {
-                        name,
-                        query,
-                        native_query: None,
-                        status: "error".to_string(),
-                        data: serde_json::Value::Null,
-                        execute_time_ms: start.elapsed().as_millis() as u64,
-                        error: Some(e.to_string()),
-                    };
-                }
-            };
-
-            let plan = match planner::plan(&ast, &state.config) {
-                Ok(p) => p,
-                Err(e) => {
-                    return InvestigateResult {
-                        name,
-                        query,
-                        native_query: None,
-                        status: "error".to_string(),
-                        data: serde_json::Value::Null,
-                        execute_time_ms: start.elapsed().as_millis() as u64,
-                        error: Some(e.message),
-                    };
-                }
-            };
-
-            // Execute first sub-query
-            if plan.sub_queries.is_empty() {
-                return InvestigateResult {
-                    name,
-                    query,
-                    native_query: None,
-                    status: "error".to_string(),
-                    data: serde_json::Value::Null,
-                    execute_time_ms: start.elapsed().as_millis() as u64,
-                    error: Some("No sub-queries in plan".to_string()),
-                };
-            }
-
-            let sq = &plan.sub_queries[0];
-            let native = sq.native_query.clone();
-
-            let result = match sq.backend_type.as_str() {
-                "prometheus" | "victoriametrics" => {
-                    let executor = PrometheusExecutor::new(&sq.backend_name, &sq.backend_url);
-                    if sq.has_time_range {
-                        executor.query_range(&sq.native_query, &sq.time_start, &sq.time_end, &sq.step).await
-                    } else {
-                        executor.query(&sq.native_query).await
+                // Parse + plan
+                let ast = match uniql_core::prepare(&query) {
+                    Ok(ast) => ast,
+                    Err(e) => {
+                        return InvestigateResult {
+                            name,
+                            query,
+                            native_query: None,
+                            status: "error".to_string(),
+                            data: serde_json::Value::Null,
+                            execute_time_ms: start.elapsed().as_millis() as u64,
+                            error: Some(e.to_string()),
+                        };
                     }
-                }
-                "victorialogs" => {
-                    VictoriaLogsExecutor::new(&sq.backend_name, &sq.backend_url)
-                        .query_range(&sq.native_query, 100, &sq.time_start, &sq.time_end).await
-                }
-                _ => {
+                };
+
+                let plan = match planner::plan(&ast, &state.config) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return InvestigateResult {
+                            name,
+                            query,
+                            native_query: None,
+                            status: "error".to_string(),
+                            data: serde_json::Value::Null,
+                            execute_time_ms: start.elapsed().as_millis() as u64,
+                            error: Some(e.message),
+                        };
+                    }
+                };
+
+                // Execute first sub-query
+                if plan.sub_queries.is_empty() {
                     return InvestigateResult {
+                        name,
+                        query,
+                        native_query: None,
+                        status: "error".to_string(),
+                        data: serde_json::Value::Null,
+                        execute_time_ms: start.elapsed().as_millis() as u64,
+                        error: Some("No sub-queries in plan".to_string()),
+                    };
+                }
+
+                let sq = &plan.sub_queries[0];
+                let native = sq.native_query.clone();
+
+                let result = match sq.backend_type.as_str() {
+                    "prometheus" | "victoriametrics" => {
+                        let executor = PrometheusExecutor::new(&sq.backend_name, &sq.backend_url);
+                        if sq.has_time_range {
+                            executor
+                                .query_range(
+                                    &sq.native_query,
+                                    &sq.time_start,
+                                    &sq.time_end,
+                                    &sq.step,
+                                )
+                                .await
+                        } else {
+                            executor.query(&sq.native_query).await
+                        }
+                    }
+                    "victorialogs" => {
+                        VictoriaLogsExecutor::new(&sq.backend_name, &sq.backend_url)
+                            .query_range(&sq.native_query, 100, &sq.time_start, &sq.time_end)
+                            .await
+                    }
+                    _ => {
+                        return InvestigateResult {
+                            name,
+                            query,
+                            native_query: Some(native),
+                            status: "error".to_string(),
+                            data: serde_json::Value::Null,
+                            execute_time_ms: start.elapsed().as_millis() as u64,
+                            error: Some(format!("Unsupported backend: {}", sq.backend_type)),
+                        };
+                    }
+                };
+
+                match result {
+                    Ok(r) => InvestigateResult {
+                        name,
+                        query,
+                        native_query: Some(native),
+                        status: "success".to_string(),
+                        data: r.data,
+                        execute_time_ms: start.elapsed().as_millis() as u64,
+                        error: None,
+                    },
+                    Err(e) => InvestigateResult {
                         name,
                         query,
                         native_query: Some(native),
                         status: "error".to_string(),
                         data: serde_json::Value::Null,
                         execute_time_ms: start.elapsed().as_millis() as u64,
-                        error: Some(format!("Unsupported backend: {}", sq.backend_type)),
-                    };
+                        error: Some(e.to_string()),
+                    },
                 }
-            };
-
-            match result {
-                Ok(r) => InvestigateResult {
-                    name,
-                    query,
-                    native_query: Some(native),
-                    status: "success".to_string(),
-                    data: r.data,
-                    execute_time_ms: start.elapsed().as_millis() as u64,
-                    error: None,
-                },
-                Err(e) => InvestigateResult {
-                    name,
-                    query,
-                    native_query: Some(native),
-                    status: "error".to_string(),
-                    data: serde_json::Value::Null,
-                    execute_time_ms: start.elapsed().as_millis() as u64,
-                    error: Some(e.to_string()),
-                },
             }
-        }
-    }).collect();
+        })
+        .collect();
 
     let results = futures::future::join_all(futures).await;
 

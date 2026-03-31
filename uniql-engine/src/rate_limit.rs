@@ -57,6 +57,7 @@ impl RateLimiter {
     }
 
     /// Clean up stale buckets (older than 60 seconds).
+    #[allow(dead_code)]
     pub async fn cleanup(&self) {
         let mut buckets = self.buckets.lock().await;
         buckets.retain(|_, b| b.last_refill.elapsed().as_secs() < 60);
@@ -78,7 +79,7 @@ mod tests {
     #[tokio::test]
     async fn blocks_over_limit() {
         let limiter = RateLimiter::new(1); // 1 req/s, 10 burst
-        // Exhaust burst
+                                           // Exhaust burst
         for _ in 0..10 {
             let _ = limiter.check("127.0.0.1").await;
         }

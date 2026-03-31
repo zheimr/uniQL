@@ -43,7 +43,8 @@ impl ResultNormalizer for PrometheusResultNormalizer {
     fn normalize(&self, result: &BackendResult, signal_type: &str) -> NormalizedResult {
         let mut rows = Vec::new();
 
-        if let Some(results_arr) = result.data
+        if let Some(results_arr) = result
+            .data
             .get("data")
             .and_then(|d| d.get("result"))
             .and_then(|r| r.as_array())
@@ -58,13 +59,14 @@ impl ResultNormalizer for PrometheusResultNormalizer {
                     }
                 }
 
-                let (ts, ts_epoch, value) = if let Some(val) = item.get("value").and_then(|v| v.as_array()) {
-                    let epoch = val.first().and_then(|t| t.as_f64());
-                    let val_str = val.get(1).and_then(|v| v.as_str()).map(|s| s.to_string());
-                    (epoch.map(|e| format!("{}", e)), epoch, val_str)
-                } else {
-                    (None, None, None)
-                };
+                let (ts, ts_epoch, value) =
+                    if let Some(val) = item.get("value").and_then(|v| v.as_array()) {
+                        let epoch = val.first().and_then(|t| t.as_f64());
+                        let val_str = val.get(1).and_then(|v| v.as_str()).map(|s| s.to_string());
+                        (epoch.map(|e| format!("{}", e)), epoch, val_str)
+                    } else {
+                        (None, None, None)
+                    };
 
                 rows.push(NormalizedRow {
                     timestamp: ts,
@@ -93,10 +95,7 @@ impl ResultNormalizer for VictoriaLogsResultNormalizer {
     fn normalize(&self, result: &BackendResult, signal_type: &str) -> NormalizedResult {
         let mut rows = Vec::new();
 
-        if let Some(results_arr) = result.data
-            .get("result")
-            .and_then(|r| r.as_array())
-        {
+        if let Some(results_arr) = result.data.get("result").and_then(|r| r.as_array()) {
             for item in results_arr {
                 let mut labels = std::collections::HashMap::new();
                 if let Some(obj) = item.as_object() {
@@ -107,9 +106,15 @@ impl ResultNormalizer for VictoriaLogsResultNormalizer {
                     }
                 }
 
-                let ts_str = item.get("_time").and_then(|t| t.as_str()).map(|s| s.to_string());
+                let ts_str = item
+                    .get("_time")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_string());
                 let ts_epoch = ts_str.as_ref().and_then(|t| parse_timestamp_to_epoch(t));
-                let msg = item.get("_msg").and_then(|m| m.as_str()).map(|s| s.to_string());
+                let msg = item
+                    .get("_msg")
+                    .and_then(|m| m.as_str())
+                    .map(|s| s.to_string());
 
                 rows.push(NormalizedRow {
                     timestamp: ts_str,
@@ -155,7 +160,9 @@ pub fn parse_timestamp_to_epoch(ts: &str) -> Option<f64> {
 
     // Parse date: YYYY-MM-DD
     let date_parts: Vec<&str> = date_part.split('-').collect();
-    if date_parts.len() != 3 { return None; }
+    if date_parts.len() != 3 {
+        return None;
+    }
     let year: i64 = date_parts[0].parse().ok()?;
     let month: i64 = date_parts[1].parse().ok()?;
     let day: i64 = date_parts[2].parse().ok()?;
@@ -186,7 +193,9 @@ pub fn parse_timestamp_to_epoch(ts: &str) -> Option<f64> {
 
     // Parse time: hh:mm:ss[.frac]
     let time_parts: Vec<&str> = time_str.split(':').collect();
-    if time_parts.len() < 3 { return None; }
+    if time_parts.len() < 3 {
+        return None;
+    }
     let hour: i64 = time_parts[0].parse().ok()?;
     let minute: i64 = time_parts[1].parse().ok()?;
     let sec_part = time_parts[2];

@@ -36,7 +36,8 @@ pub fn validate(input: &str) -> Result<String, JsError> {
                 "error": e.to_string(),
                 "signals": [],
                 "clauses": ""
-            }).to_string());
+            })
+            .to_string());
         }
     };
 
@@ -82,11 +83,16 @@ pub fn explain(input: &str) -> Result<String, JsError> {
             return Ok(serde_json::json!({
                 "error": e.to_string(),
                 "steps": []
-            }).to_string());
+            })
+            .to_string());
         }
     };
 
-    let signals: Vec<String> = ast.inferred_signal_types().iter().map(|s| format!("{:?}", s)).collect();
+    let signals: Vec<String> = ast
+        .inferred_signal_types()
+        .iter()
+        .map(|s| format!("{:?}", s))
+        .collect();
     let clauses = ast.clause_summary();
 
     let mut steps = Vec::<serde_json::Value>::new();
@@ -100,48 +106,39 @@ pub fn explain(input: &str) -> Result<String, JsError> {
     let mut step_num = 2u32;
 
     // PromQL
-    match uniql_core::to_promql(input) {
-        Ok(pql) => {
-            steps.push(serde_json::json!({
-                "step": step_num,
-                "action": "transpile_promql",
-                "detail": "Metrics → PromQL → VictoriaMetrics",
-                "native_query": pql,
-                "backend": "prometheus",
-            }));
-            step_num += 1;
-        }
-        Err(_) => {}
+    if let Ok(pql) = uniql_core::to_promql(input) {
+        steps.push(serde_json::json!({
+            "step": step_num,
+            "action": "transpile_promql",
+            "detail": "Metrics → PromQL → VictoriaMetrics",
+            "native_query": pql,
+            "backend": "prometheus",
+        }));
+        step_num += 1;
     }
 
     // LogsQL
-    match uniql_core::to_logsql(input) {
-        Ok(lsql) => {
-            steps.push(serde_json::json!({
-                "step": step_num,
-                "action": "transpile_logsql",
-                "detail": "Logs → LogsQL → VictoriaLogs",
-                "native_query": lsql,
-                "backend": "victorialogs",
-            }));
-            step_num += 1;
-        }
-        Err(_) => {}
+    if let Ok(lsql) = uniql_core::to_logsql(input) {
+        steps.push(serde_json::json!({
+            "step": step_num,
+            "action": "transpile_logsql",
+            "detail": "Logs → LogsQL → VictoriaLogs",
+            "native_query": lsql,
+            "backend": "victorialogs",
+        }));
+        step_num += 1;
     }
 
     // LogQL
-    match uniql_core::to_logql(input) {
-        Ok(lql) => {
-            steps.push(serde_json::json!({
-                "step": step_num,
-                "action": "transpile_logql",
-                "detail": "Logs → LogQL → Loki",
-                "native_query": lql,
-                "backend": "loki",
-            }));
-            step_num += 1;
-        }
-        Err(_) => {}
+    if let Ok(lql) = uniql_core::to_logql(input) {
+        steps.push(serde_json::json!({
+            "step": step_num,
+            "action": "transpile_logql",
+            "detail": "Logs → LogQL → Loki",
+            "native_query": lql,
+            "backend": "loki",
+        }));
+        step_num += 1;
     }
 
     steps.push(serde_json::json!({
@@ -154,25 +151,53 @@ pub fn explain(input: &str) -> Result<String, JsError> {
         "signals": signals,
         "clauses": clauses,
         "steps": steps,
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Autocomplete suggestions for UNIQL query at cursor position
 #[wasm_bindgen]
 pub fn autocomplete(input: &str, cursor: usize) -> Result<String, JsError> {
-    let before = if cursor <= input.len() { &input[..cursor] } else { input };
-    let last_token = before.split_whitespace().last().unwrap_or("").to_uppercase();
+    let before = if cursor <= input.len() {
+        &input[..cursor]
+    } else {
+        input
+    };
+    let last_token = before
+        .split_whitespace()
+        .last()
+        .unwrap_or("")
+        .to_uppercase();
 
     let keywords = vec![
-        "SHOW", "FROM", "WHERE", "WITHIN", "COMPUTE", "GROUP", "BY",
-        "HAVING", "CORRELATE", "ON", "PARSE", "DEFINE", "AS",
-        "AND", "OR", "NOT", "IN", "CONTAINS", "MATCHES", "STARTS_WITH",
+        "SHOW",
+        "FROM",
+        "WHERE",
+        "WITHIN",
+        "COMPUTE",
+        "GROUP",
+        "BY",
+        "HAVING",
+        "CORRELATE",
+        "ON",
+        "PARSE",
+        "DEFINE",
+        "AS",
+        "AND",
+        "OR",
+        "NOT",
+        "IN",
+        "CONTAINS",
+        "MATCHES",
+        "STARTS_WITH",
     ];
     let show_formats = vec!["timeseries", "table", "count", "timeline", "heatmap"];
     let signals = vec!["metrics", "logs", "traces", "events"];
-    let backends = vec!["victoria", "vlogs", "loki"];
+    let backends = ["victoria", "vlogs", "loki"];
     let within_hints = vec!["last", "today", "this_week"];
-    let functions = vec!["count", "sum", "avg", "min", "max", "rate", "p50", "p90", "p95", "p99"];
+    let functions = vec![
+        "count", "sum", "avg", "min", "max", "rate", "p50", "p90", "p95", "p99",
+    ];
 
     let suggestions: Vec<&str> = if before.trim().is_empty() {
         vec!["SHOW", "FROM", "DEFINE"]
@@ -190,7 +215,8 @@ pub fn autocomplete(input: &str, cursor: usize) -> Result<String, JsError> {
         vec!["json", "logfmt", "pattern", "regexp"]
     } else {
         let partial = last_token.to_lowercase();
-        keywords.iter()
+        keywords
+            .iter()
             .chain(show_formats.iter())
             .chain(signals.iter())
             .chain(backends.iter())
@@ -204,5 +230,6 @@ pub fn autocomplete(input: &str, cursor: usize) -> Result<String, JsError> {
         "suggestions": suggestions,
         "cursor": cursor,
         "token": last_token,
-    }).to_string())
+    })
+    .to_string())
 }

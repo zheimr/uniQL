@@ -5,6 +5,7 @@
 /// Tier 3: Stress (long filter chains, complex expressions, edge cases)
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct BenchQuery {
     pub id: &'static str,
     pub tier: Tier,
@@ -242,11 +243,13 @@ pub fn corpus() -> Vec<BenchQuery> {
 }
 
 /// Subset for quick benchmarks
+#[allow(dead_code)]
 pub fn corpus_by_tier(tier: Tier) -> Vec<BenchQuery> {
     corpus().into_iter().filter(|q| q.tier == tier).collect()
 }
 
 /// All metric queries (PromQL target)
+#[allow(dead_code)]
 pub fn corpus_metrics() -> Vec<BenchQuery> {
     corpus()
         .into_iter()
@@ -255,6 +258,7 @@ pub fn corpus_metrics() -> Vec<BenchQuery> {
 }
 
 /// All log queries
+#[allow(dead_code)]
 pub fn corpus_logs() -> Vec<BenchQuery> {
     corpus()
         .into_iter()

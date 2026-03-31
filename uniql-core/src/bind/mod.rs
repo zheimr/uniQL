@@ -61,9 +61,7 @@ pub enum BoundCondition {
     },
     /// Cross-field OR: each branch is a separate set of conditions.
     /// Transpilers should generate union expressions (e.g., PromQL `or`, LogQL `or`).
-    CrossFieldOr {
-        branches: Vec<Vec<BoundCondition>>,
-    },
+    CrossFieldOr { branches: Vec<Vec<BoundCondition>> },
 }
 
 /// A flattened OR group: `service = "a" OR service = "b"` → one condition.
@@ -99,8 +97,13 @@ impl BoundOp {
             BinaryOp::RegexNoMatch => BoundOp::RegexNoMatch,
             // Logical and arithmetic ops should not appear in condition LHS → Eq fallback.
             // AND/OR are split before reaching this point; arithmetic ops are rare in WHERE.
-            BinaryOp::And | BinaryOp::Or
-            | BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => BoundOp::Eq,
+            BinaryOp::And
+            | BinaryOp::Or
+            | BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Mod => BoundOp::Eq,
         }
     }
 
@@ -138,9 +141,21 @@ impl BoundOp {
 pub fn is_stream_label(name: &str) -> bool {
     matches!(
         name,
-        "job" | "service" | "namespace" | "container" | "pod" | "host"
-        | "instance" | "env" | "environment" | "cluster" | "region"
-        | "app" | "component" | "filename" | "device_type"
+        "job"
+            | "service"
+            | "namespace"
+            | "container"
+            | "pod"
+            | "host"
+            | "instance"
+            | "env"
+            | "environment"
+            | "cluster"
+            | "region"
+            | "app"
+            | "component"
+            | "filename"
+            | "device_type"
     )
 }
 
@@ -184,7 +199,8 @@ pub fn resolve_value(expr: &Expr) -> Option<String> {
 /// Bind a prepared (parsed + expanded + validated) query.
 /// Resolves identifiers, classifies conditions, validates prefix matches.
 pub fn bind(query: &Query) -> Result<BoundQuery, String> {
-    let signal_type = query.inferred_signal_types()
+    let signal_type = query
+        .inferred_signal_types()
         .into_iter()
         .next()
         .unwrap_or(SignalType::Unknown("unknown".to_string()));
@@ -208,12 +224,20 @@ fn extract_bound_conditions(
     out: &mut Vec<BoundCondition>,
 ) -> Result<(), String> {
     match expr {
-        Expr::BinaryOp { left, op: BinaryOp::And, right } => {
+        Expr::BinaryOp {
+            left,
+            op: BinaryOp::And,
+            right,
+        } => {
             extract_bound_conditions(left, signal_type, out)?;
             extract_bound_conditions(right, signal_type, out)?;
         }
 
-        Expr::BinaryOp { left: _, op: BinaryOp::Or, right: _ } => {
+        Expr::BinaryOp {
+            left: _,
+            op: BinaryOp::Or,
+            right: _,
+        } => {
             // Try to flatten OR on same field: service = "a" OR service = "b" → regex
             if let Some(or_group) = collect_or_values(expr) {
                 out.push(BoundCondition::OrGroup(or_group));
@@ -232,17 +256,25 @@ fn extract_bound_conditions(
         Expr::BinaryOp { left, op, right } => {
             // Detect arithmetic in WHERE: `cpu + mem > 100` has BinaryOp(Add) as LHS of Gt
             if contains_arithmetic(left) || contains_arithmetic(right) {
-                return Err(format!(
-                    "Arithmetic expressions in WHERE clause are not supported. Use COMPUTE for calculations."
-                ));
+                return Err(
+                    "Arithmetic expressions in WHERE clause are not supported. Use COMPUTE for calculations.".to_string()
+                );
             }
 
             // Handle reversed comparisons: `100 < cpu` → normalize to `cpu > 100`
             let (label, value, bound_op) = if resolve_label_name(left).is_some() {
-                (resolve_label_name(left), resolve_value(right), BoundOp::from_binary_op(op))
+                (
+                    resolve_label_name(left),
+                    resolve_value(right),
+                    BoundOp::from_binary_op(op),
+                )
             } else if resolve_label_name(right).is_some() {
                 // Reversed: LHS is a value, RHS is a label → flip
-                (resolve_label_name(right), resolve_value(left), flip_comparison(BoundOp::from_binary_op(op)))
+                (
+                    resolve_label_name(right),
+                    resolve_value(left),
+                    flip_comparison(BoundOp::from_binary_op(op)),
+                )
             } else {
                 (None, None, BoundOp::Eq)
             };
@@ -266,7 +298,11 @@ fn extract_bound_conditions(
             }
         }
 
-        Expr::StringMatch { expr: inner, op, pattern } => {
+        Expr::StringMatch {
+            expr: inner,
+            op,
+            pattern,
+        } => {
             let label = resolve_label_name(inner);
             if let Some(label) = label {
                 if is_message_field(&label) {
@@ -284,10 +320,15 @@ fn extract_bound_conditions(
             }
         }
 
-        Expr::InList { expr: inner, list, negated } => {
+        Expr::InList {
+            expr: inner,
+            list,
+            negated,
+        } => {
             let label = resolve_label_name(inner);
             if let Some(label) = label {
-                let values: Vec<String> = list.iter()
+                let values: Vec<String> = list
+                    .iter()
                     .filter_map(|e| match e {
                         Expr::StringLit(s) => Some(s.clone()),
                         _ => None,
@@ -321,7 +362,11 @@ fn collect_or_branches(
     branches: &mut Vec<Vec<BoundCondition>>,
 ) -> Result<(), String> {
     match expr {
-        Expr::BinaryOp { left, op: BinaryOp::Or, right } => {
+        Expr::BinaryOp {
+            left,
+            op: BinaryOp::Or,
+            right,
+        } => {
             collect_or_branches(left, signal_type, branches)?;
             collect_or_branches(right, signal_type, branches)?;
         }
@@ -338,7 +383,11 @@ fn collect_or_branches(
 /// e.g., `service = "a" OR service = "b"` → BoundOrGroup { field: "service", values: ["a", "b"] }
 fn collect_or_values(expr: &Expr) -> Option<BoundOrGroup> {
     match expr {
-        Expr::BinaryOp { left, op: BinaryOp::Or, right } => {
+        Expr::BinaryOp {
+            left,
+            op: BinaryOp::Or,
+            right,
+        } => {
             let l = collect_or_values(left);
             let r = collect_or_values(right);
             match (l, r) {
@@ -349,11 +398,18 @@ fn collect_or_values(expr: &Expr) -> Option<BoundOrGroup> {
                 _ => None,
             }
         }
-        Expr::BinaryOp { left, op: BinaryOp::Eq, right } => {
+        Expr::BinaryOp {
+            left,
+            op: BinaryOp::Eq,
+            right,
+        } => {
             let label = resolve_label_name(left);
             let value = resolve_value(right);
             match (label, value) {
-                (Some(l), Some(v)) => Some(BoundOrGroup { field: l, values: vec![v] }),
+                (Some(l), Some(v)) => Some(BoundOrGroup {
+                    field: l,
+                    values: vec![v],
+                }),
                 _ => None,
             }
         }
@@ -364,9 +420,13 @@ fn collect_or_values(expr: &Expr) -> Option<BoundOrGroup> {
 /// Check if an expression contains arithmetic operators (Add/Sub/Mul/Div/Mod).
 fn contains_arithmetic(expr: &Expr) -> bool {
     match expr {
-        Expr::BinaryOp { op, left, right, .. } => {
-            matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod)
-                || contains_arithmetic(left)
+        Expr::BinaryOp {
+            op, left, right, ..
+        } => {
+            matches!(
+                op,
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
+            ) || contains_arithmetic(left)
                 || contains_arithmetic(right)
         }
         _ => false,
@@ -426,20 +486,33 @@ mod tests {
 
     #[test]
     fn test_bind_simple_metric() {
-        let ast = crate::prepare("FROM metrics WHERE __name__ = \"http_requests_total\" AND job = \"api\"").unwrap();
+        let ast = crate::prepare(
+            "FROM metrics WHERE __name__ = \"http_requests_total\" AND job = \"api\"",
+        )
+        .unwrap();
         let bound = bind(&ast).unwrap();
         assert_eq!(bound.conditions.len(), 2);
-        assert!(matches!(&bound.conditions[0], BoundCondition::MetricName(n) if n == "http_requests_total"));
-        assert!(matches!(&bound.conditions[1], BoundCondition::StreamLabel { name, .. } if name == "job"));
+        assert!(
+            matches!(&bound.conditions[0], BoundCondition::MetricName(n) if n == "http_requests_total")
+        );
+        assert!(
+            matches!(&bound.conditions[1], BoundCondition::StreamLabel { name, .. } if name == "job")
+        );
     }
 
     #[test]
     fn test_bind_log_content_filter() {
-        let ast = crate::prepare("FROM logs WHERE service = \"api\" AND message CONTAINS \"error\"").unwrap();
+        let ast =
+            crate::prepare("FROM logs WHERE service = \"api\" AND message CONTAINS \"error\"")
+                .unwrap();
         let bound = bind(&ast).unwrap();
         assert_eq!(bound.conditions.len(), 2);
-        assert!(matches!(&bound.conditions[0], BoundCondition::StreamLabel { name, .. } if name == "service"));
-        assert!(matches!(&bound.conditions[1], BoundCondition::ContentFilter { pattern, .. } if pattern == "error"));
+        assert!(
+            matches!(&bound.conditions[0], BoundCondition::StreamLabel { name, .. } if name == "service")
+        );
+        assert!(
+            matches!(&bound.conditions[1], BoundCondition::ContentFilter { pattern, .. } if pattern == "error")
+        );
     }
 
     #[test]
@@ -448,7 +521,10 @@ mod tests {
             "FROM metrics WHERE __name__ = \"http_requests_total\" AND (service = \"nginx\" OR service = \"envoy\")"
         ).unwrap();
         let bound = bind(&ast).unwrap();
-        let or_group = bound.conditions.iter().find(|c| matches!(c, BoundCondition::OrGroup(_)));
+        let or_group = bound
+            .conditions
+            .iter()
+            .find(|c| matches!(c, BoundCondition::OrGroup(_)));
         assert!(or_group.is_some());
         if let Some(BoundCondition::OrGroup(g)) = or_group {
             assert_eq!(g.field, "service");
@@ -462,9 +538,17 @@ mod tests {
             "FROM metrics WHERE __name__ = \"http_requests_total\" AND service IN [\"nginx\", \"envoy\"]"
         ).unwrap();
         let bound = bind(&ast).unwrap();
-        let in_cond = bound.conditions.iter().find(|c| matches!(c, BoundCondition::InList { .. }));
+        let in_cond = bound
+            .conditions
+            .iter()
+            .find(|c| matches!(c, BoundCondition::InList { .. }));
         assert!(in_cond.is_some());
-        if let Some(BoundCondition::InList { name, values, negated }) = in_cond {
+        if let Some(BoundCondition::InList {
+            name,
+            values,
+            negated,
+        }) = in_cond
+        {
             assert_eq!(name, "service");
             assert_eq!(values.len(), 2);
             assert!(!negated);
@@ -474,10 +558,14 @@ mod tests {
     #[test]
     fn test_bind_field_string_match() {
         let ast = crate::prepare(
-            "FROM metrics WHERE __name__ = \"http_requests_total\" AND path CONTAINS \"api\""
-        ).unwrap();
+            "FROM metrics WHERE __name__ = \"http_requests_total\" AND path CONTAINS \"api\"",
+        )
+        .unwrap();
         let bound = bind(&ast).unwrap();
-        let sm = bound.conditions.iter().find(|c| matches!(c, BoundCondition::FieldStringMatch { .. }));
+        let sm = bound
+            .conditions
+            .iter()
+            .find(|c| matches!(c, BoundCondition::FieldStringMatch { .. }));
         assert!(sm.is_some());
     }
 
@@ -494,7 +582,10 @@ mod tests {
             "FROM metrics WHERE __name__ = \"cpu\" AND (service = \"a\" OR service = \"b\" OR service = \"c\")"
         ).unwrap();
         let bound = bind(&ast).unwrap();
-        let or_group = bound.conditions.iter().find(|c| matches!(c, BoundCondition::OrGroup(_)));
+        let or_group = bound
+            .conditions
+            .iter()
+            .find(|c| matches!(c, BoundCondition::OrGroup(_)));
         assert!(or_group.is_some());
         if let Some(BoundCondition::OrGroup(g)) = or_group {
             assert_eq!(g.field, "service");
@@ -505,14 +596,25 @@ mod tests {
     #[test]
     fn test_bind_cross_field_or() {
         // OR on different fields should produce CrossFieldOr, not OrGroup
-        let ast = crate::prepare(
-            "FROM logs WHERE service = \"api\" OR host = \"prod-01\""
-        ).unwrap();
+        let ast =
+            crate::prepare("FROM logs WHERE service = \"api\" OR host = \"prod-01\"").unwrap();
         let bound = bind(&ast).unwrap();
-        let or_group = bound.conditions.iter().find(|c| matches!(c, BoundCondition::OrGroup(_)));
-        assert!(or_group.is_none(), "Cross-field OR should not create OrGroup");
-        let cross_or = bound.conditions.iter().find(|c| matches!(c, BoundCondition::CrossFieldOr { .. }));
-        assert!(cross_or.is_some(), "Cross-field OR should create CrossFieldOr");
+        let or_group = bound
+            .conditions
+            .iter()
+            .find(|c| matches!(c, BoundCondition::OrGroup(_)));
+        assert!(
+            or_group.is_none(),
+            "Cross-field OR should not create OrGroup"
+        );
+        let cross_or = bound
+            .conditions
+            .iter()
+            .find(|c| matches!(c, BoundCondition::CrossFieldOr { .. }));
+        assert!(
+            cross_or.is_some(),
+            "Cross-field OR should create CrossFieldOr"
+        );
         if let Some(BoundCondition::CrossFieldOr { branches }) = cross_or {
             assert_eq!(branches.len(), 2, "Should have 2 branches");
         }
@@ -527,19 +629,31 @@ mod tests {
             );
             let ast = crate::prepare(&query).unwrap();
             let bound = bind(&ast).unwrap();
-            let cf = bound.conditions.iter().find(|c| matches!(c, BoundCondition::ContentFilter { .. }));
-            assert!(cf.is_some(), "Field '{}' should produce ContentFilter", msg_field);
+            let cf = bound
+                .conditions
+                .iter()
+                .find(|c| matches!(c, BoundCondition::ContentFilter { .. }));
+            assert!(
+                cf.is_some(),
+                "Field '{}' should produce ContentFilter",
+                msg_field
+            );
         }
     }
 
     #[test]
     fn test_bind_non_stream_field() {
-        let ast = crate::prepare(
-            "FROM logs WHERE service = \"api\" AND level = \"error\""
-        ).unwrap();
+        let ast =
+            crate::prepare("FROM logs WHERE service = \"api\" AND level = \"error\"").unwrap();
         let bound = bind(&ast).unwrap();
-        let ff = bound.conditions.iter().find(|c| matches!(c, BoundCondition::FieldFilter { .. }));
-        assert!(ff.is_some(), "level should produce FieldFilter, not StreamLabel");
+        let ff = bound
+            .conditions
+            .iter()
+            .find(|c| matches!(c, BoundCondition::FieldFilter { .. }));
+        assert!(
+            ff.is_some(),
+            "level should produce FieldFilter, not StreamLabel"
+        );
     }
 
     #[test]
@@ -547,8 +661,14 @@ mod tests {
         // WHERE 100 < cpu → should become cpu > 100
         let ast = crate::prepare("FROM metrics WHERE __name__ = \"cpu\" AND 100 < usage").unwrap();
         let bound = bind(&ast).unwrap();
-        let ff = bound.conditions.iter().find(|c| matches!(c, BoundCondition::FieldFilter { name, .. } if name == "usage"));
-        assert!(ff.is_some(), "Reversed comparison should produce FieldFilter for 'usage'");
+        let ff = bound
+            .conditions
+            .iter()
+            .find(|c| matches!(c, BoundCondition::FieldFilter { name, .. } if name == "usage"));
+        assert!(
+            ff.is_some(),
+            "Reversed comparison should produce FieldFilter for 'usage'"
+        );
         if let Some(BoundCondition::FieldFilter { op, value, .. }) = ff {
             assert_eq!(*op, BoundOp::Gt, "100 < usage → usage > 100");
             assert_eq!(value, "100");
@@ -558,15 +678,23 @@ mod tests {
     #[test]
     fn test_reversed_comparison_eq_symmetric() {
         // WHERE "nginx" = service → service = "nginx"
-        let ast = crate::prepare("FROM metrics WHERE __name__ = \"cpu\" AND \"nginx\" = service").unwrap();
+        let ast = crate::prepare("FROM metrics WHERE __name__ = \"cpu\" AND \"nginx\" = service")
+            .unwrap();
         let bound = bind(&ast).unwrap();
-        let sl = bound.conditions.iter().find(|c| matches!(c, BoundCondition::StreamLabel { name, .. } if name == "service"));
-        assert!(sl.is_some(), "Reversed eq should produce StreamLabel for 'service'");
+        let sl = bound
+            .conditions
+            .iter()
+            .find(|c| matches!(c, BoundCondition::StreamLabel { name, .. } if name == "service"));
+        assert!(
+            sl.is_some(),
+            "Reversed eq should produce StreamLabel for 'service'"
+        );
     }
 
     #[test]
     fn test_arithmetic_in_where_rejected() {
-        let ast = crate::prepare("FROM metrics WHERE __name__ = \"cpu\" AND cpu + mem > 100").unwrap();
+        let ast =
+            crate::prepare("FROM metrics WHERE __name__ = \"cpu\" AND cpu + mem > 100").unwrap();
         let result = bind(&ast);
         assert!(result.is_err(), "Arithmetic in WHERE should be rejected");
         assert!(result.unwrap_err().contains("Arithmetic"));
