@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite';
 import wasm from 'vite-plugin-wasm';
 
 export default defineConfig({
+  base: '/uniQL/',
   plugins: [react(), tailwindcss(), wasm()],
   build: {
     target: 'esnext',
